@@ -744,7 +744,11 @@ void App::OnKeyDown(UINT key) {
         break;
 
     case 'F':
-        if (!ctrl) ResetZoom();
+        if (ctrl) {
+            OpenFolderDialog();
+        } else {
+            ResetZoom();
+        }
         break;
 
     case '1':
