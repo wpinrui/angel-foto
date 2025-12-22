@@ -449,11 +449,21 @@ void App::SaveImageAs() {
 
     COMDLG_FILTERSPEC filters[] = {
         { L"PNG Image", L"*.png" },
-        { L"JPEG Image", L"*.jpg" },
+        { L"JPEG Image", L"*.jpg;*.jpeg" },
         { L"BMP Image", L"*.bmp" },
         { L"All Files", L"*.*" }
     };
     dialog->SetFileTypes(ARRAYSIZE(filters), filters);
+
+    // Set default filter based on original extension
+    std::wstring extLower = srcExt;
+    std::transform(extLower.begin(), extLower.end(), extLower.begin(), ::towlower);
+    UINT filterIndex = 1; // Default to PNG
+    if (extLower == L".jpg" || extLower == L".jpeg") filterIndex = 2;
+    else if (extLower == L".bmp") filterIndex = 3;
+    else if (extLower == L".png") filterIndex = 1;
+    dialog->SetFileTypeIndex(filterIndex);
+
     dialog->SetDefaultExtension(srcExt.empty() ? L"png" : srcExt.c_str() + 1);
     dialog->SetFileName(srcPath.stem().wstring().c_str());
 
