@@ -638,7 +638,6 @@ void App::ApplyCrop() {
 
     if (cropW <= 0 || cropH <= 0) return;
 
-    auto wicFactory = m_renderer->GetWICFactory();
     auto dc = m_renderer->GetDeviceContext();
 
     // Create cropped bitmap
