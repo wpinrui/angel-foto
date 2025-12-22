@@ -76,6 +76,39 @@ Or drag-drop an image onto the executable.
 - Direct2D / Direct3D 11
 - Windows Imaging Component (WIC)
 
+## Roadmap
+
+### Phase 1: Core Viewer (MVP) - Done
+- [x] Win32 window with DPI awareness and dark title bar
+- [x] Direct2D hardware-accelerated rendering
+- [x] Auto-fit images to window
+- [x] Folder navigation (arrow keys, Home/End)
+- [x] Fast browsing with image pre-caching
+- [x] Animated GIF playback with pause/play
+- [x] Zoom/pan with mouse wheel and drag
+- [x] Delete to recycle bin
+
+### Phase 2: Core Features
+- [ ] Set as wallpaper (Ctrl+B)
+- [ ] Rotate 90° CW/CCW
+- [ ] Crop with drag selection
+- [ ] Markup/drawing mode
+- [ ] Text overlay
+- [ ] Copy to clipboard (Ctrl+C)
+- [ ] Open file/folder dialogs
+- [ ] Save/Save As
+
+### Phase 3: Polish & Distribution
+- [ ] Floating toolbar (auto-hide)
+- [ ] Right-click context menu
+- [ ] Performance optimization (<100ms startup)
+- [ ] MSI installer with file associations
+- [ ] "Open with" context menu integration
+
+## Supported Formats
+
+JPEG, PNG, BMP, GIF (animated), TIFF, WebP, HEIC
+
 ## License
 
 MIT
