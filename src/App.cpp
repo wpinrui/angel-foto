@@ -488,14 +488,134 @@ void App::SaveImageAs() {
 }
 
 bool App::SaveImageToFile(const std::wstring& filePath) {
-    if (!m_currentImage || !m_currentImage->bitmap) return false;
+    if (!m_currentImage || m_currentImage->filePath.empty()) return false;
 
     auto wicFactory = m_renderer->GetWICFactory();
-    if (!wicFactory) return false;
+    auto d2dFactory = m_renderer->GetFactory();
+    if (!wicFactory || !d2dFactory) return false;
 
-    auto size = m_currentImage->bitmap->GetSize();
-    int width = static_cast<int>(size.width);
-    int height = static_cast<int>(size.height);
+    // Load original image with WIC
+    ComPtr<IWICBitmapDecoder> decoder;
+    HRESULT hr = wicFactory->CreateDecoderFromFilename(
+        m_currentImage->filePath.c_str(), nullptr, GENERIC_READ,
+        WICDecodeMetadataCacheOnDemand, &decoder);
+    if (FAILED(hr)) return false;
+
+    ComPtr<IWICBitmapFrameDecode> frameDecode;
+    hr = decoder->GetFrame(0, &frameDecode);
+    if (FAILED(hr)) return false;
+
+    // Convert to 32bppBGRA for processing
+    ComPtr<IWICFormatConverter> converter;
+    hr = wicFactory->CreateFormatConverter(&converter);
+    if (FAILED(hr)) return false;
+
+    hr = converter->Initialize(frameDecode.Get(), GUID_WICPixelFormat32bppBGRA,
+        WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom);
+    if (FAILED(hr)) return false;
+
+    ComPtr<IWICBitmapSource> source = converter;
+
+    // Apply rotation if needed
+    if (m_rotation != 0) {
+        ComPtr<IWICBitmapFlipRotator> rotator;
+        hr = wicFactory->CreateBitmapFlipRotator(&rotator);
+        if (FAILED(hr)) return false;
+
+        WICBitmapTransformOptions transform = WICBitmapTransformRotate0;
+        if (m_rotation == 90) transform = WICBitmapTransformRotate90;
+        else if (m_rotation == 180) transform = WICBitmapTransformRotate180;
+        else if (m_rotation == 270) transform = WICBitmapTransformRotate270;
+
+        hr = rotator->Initialize(source.Get(), transform);
+        if (FAILED(hr)) return false;
+
+        source = rotator;
+    }
+
+    // Get final dimensions
+    UINT width, height;
+    source->GetSize(&width, &height);
+
+    // If we have markup or text, we need to render them onto the image
+    bool hasOverlays = !m_markupStrokes.empty() || !m_textOverlays.empty();
+    ComPtr<IWICBitmap> wicBitmap;
+
+    if (hasOverlays) {
+        // Create a WIC bitmap we can draw on
+        hr = wicFactory->CreateBitmap(width, height, GUID_WICPixelFormat32bppBGRA,
+            WICBitmapCacheOnLoad, &wicBitmap);
+        if (FAILED(hr)) return false;
+
+        // Copy source to wicBitmap
+        WICRect rcLock = { 0, 0, (INT)width, (INT)height };
+        ComPtr<IWICBitmapLock> lock;
+        hr = wicBitmap->Lock(&rcLock, WICBitmapLockWrite, &lock);
+        if (FAILED(hr)) return false;
+
+        UINT bufferSize;
+        BYTE* pData;
+        hr = lock->GetDataPointer(&bufferSize, &pData);
+        if (FAILED(hr)) return false;
+
+        UINT stride;
+        lock->GetStride(&stride);
+        hr = source->CopyPixels(&rcLock, stride, bufferSize, pData);
+        lock = nullptr; // Release lock
+
+        if (FAILED(hr)) return false;
+
+        // Create D2D render target from WIC bitmap
+        ComPtr<ID2D1RenderTarget> rt;
+        D2D1_RENDER_TARGET_PROPERTIES rtProps = D2D1::RenderTargetProperties(
+            D2D1_RENDER_TARGET_TYPE_DEFAULT,
+            D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED)
+        );
+        hr = d2dFactory->CreateWicBitmapRenderTarget(wicBitmap.Get(), rtProps, &rt);
+        if (FAILED(hr)) return false;
+
+        rt->BeginDraw();
+
+        // Draw markup strokes
+        for (const auto& stroke : m_markupStrokes) {
+            if (stroke.points.size() < 2) continue;
+
+            ComPtr<ID2D1SolidColorBrush> brush;
+            rt->CreateSolidColorBrush(stroke.color, &brush);
+            if (!brush) continue;
+
+            for (size_t i = 1; i < stroke.points.size(); ++i) {
+                rt->DrawLine(stroke.points[i - 1], stroke.points[i], brush.Get(), stroke.width);
+            }
+        }
+
+        // Draw text overlays
+        ComPtr<IDWriteFactory> dwriteFactory;
+        hr = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED,
+            __uuidof(IDWriteFactory), reinterpret_cast<IUnknown**>(dwriteFactory.GetAddressOf()));
+        if (SUCCEEDED(hr)) {
+            for (const auto& text : m_textOverlays) {
+                ComPtr<IDWriteTextFormat> textFormat;
+                hr = dwriteFactory->CreateTextFormat(
+                    L"Segoe UI", nullptr,
+                    DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+                    text.fontSize, L"en-us", &textFormat);
+                if (FAILED(hr)) continue;
+
+                ComPtr<ID2D1SolidColorBrush> brush;
+                rt->CreateSolidColorBrush(text.color, &brush);
+                if (!brush) continue;
+
+                rt->DrawText(text.text.c_str(), (UINT32)text.text.length(), textFormat.Get(),
+                    D2D1::RectF(text.x, text.y, (float)width, (float)height), brush.Get());
+            }
+        }
+
+        hr = rt->EndDraw();
+        if (FAILED(hr)) return false;
+
+        source = wicBitmap;
+    }
 
     // Determine encoder based on extension
     fs::path path(filePath);
@@ -510,7 +630,7 @@ bool App::SaveImageToFile(const std::wstring& filePath) {
 
     // Create encoder
     ComPtr<IWICBitmapEncoder> encoder;
-    HRESULT hr = wicFactory->CreateEncoder(containerFormat, nullptr, &encoder);
+    hr = wicFactory->CreateEncoder(containerFormat, nullptr, &encoder);
     if (FAILED(hr)) return false;
 
     // Create stream
@@ -539,50 +659,7 @@ bool App::SaveImageToFile(const std::wstring& filePath) {
     hr = frame->SetPixelFormat(&pixelFormat);
     if (FAILED(hr)) return false;
 
-    // Create a WIC bitmap from D2D bitmap
-    ComPtr<IWICBitmap> wicBitmap;
-    hr = wicFactory->CreateBitmap(width, height, GUID_WICPixelFormat32bppBGRA,
-        WICBitmapCacheOnLoad, &wicBitmap);
-    if (FAILED(hr)) return false;
-
-    // Copy pixels from D2D bitmap
-    ComPtr<ID2D1Bitmap1> bitmap1;
-    D2D1_BITMAP_PROPERTIES1 props = D2D1::BitmapProperties1(
-        D2D1_BITMAP_OPTIONS_CPU_READ | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
-        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED)
-    );
-
-    auto dc = m_renderer->GetDeviceContext();
-    hr = dc->CreateBitmap(D2D1::SizeU(width, height), nullptr, 0, props, &bitmap1);
-    if (FAILED(hr)) return false;
-
-    D2D1_POINT_2U destPoint = {0, 0};
-    D2D1_RECT_U srcRect = {0, 0, (UINT32)width, (UINT32)height};
-    hr = bitmap1->CopyFromBitmap(&destPoint, m_currentImage->bitmap.Get(), &srcRect);
-    if (FAILED(hr)) return false;
-
-    D2D1_MAPPED_RECT mapped;
-    hr = bitmap1->Map(D2D1_MAP_OPTIONS_READ, &mapped);
-    if (FAILED(hr)) return false;
-
-    WICRect wicRect = {0, 0, width, height};
-    ComPtr<IWICBitmapLock> lock;
-    hr = wicBitmap->Lock(&wicRect, WICBitmapLockWrite, &lock);
-    if (SUCCEEDED(hr)) {
-        UINT bufferSize;
-        BYTE* pData;
-        hr = lock->GetDataPointer(&bufferSize, &pData);
-        if (SUCCEEDED(hr)) {
-            UINT stride;
-            lock->GetStride(&stride);
-            for (int y = 0; y < height; y++) {
-                memcpy(pData + y * stride, mapped.bits + y * mapped.pitch, width * 4);
-            }
-        }
-    }
-    bitmap1->Unmap();
-
-    hr = frame->WriteSource(wicBitmap.Get(), nullptr);
+    hr = frame->WriteSource(source.Get(), nullptr);
     if (FAILED(hr)) return false;
 
     hr = frame->Commit();
