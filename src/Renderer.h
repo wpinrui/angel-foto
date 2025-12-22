@@ -23,6 +23,15 @@ public:
     float GetPanX() const { return m_panX; }
     float GetPanY() const { return m_panY; }
 
+    // Rotation (0, 90, 180, 270)
+    void SetRotation(int degrees);
+    int GetRotation() const { return m_rotation; }
+
+    // Crop mode
+    void SetCropMode(bool enabled);
+    void SetCropRect(D2D1_RECT_F rect);
+    D2D1_RECT_F GetCropRectInImageCoords() const;
+
     // Get Direct2D factory (for creating bitmaps)
     ID2D1Factory1* GetFactory() const { return m_factory.Get(); }
     ID2D1DeviceContext* GetDeviceContext() const { return m_deviceContext.Get(); }
@@ -52,6 +61,13 @@ private:
     float m_zoom = 1.0f;
     float m_panX = 0.0f;
     float m_panY = 0.0f;
+    int m_rotation = 0;
+
+    // Crop mode
+    bool m_cropMode = false;
+    D2D1_RECT_F m_cropRect = { 0, 0, 0, 0 };
+    ComPtr<ID2D1SolidColorBrush> m_cropBrush;
+    ComPtr<ID2D1SolidColorBrush> m_cropDimBrush;
 
     // Background color (dark)
     D2D1_COLOR_F m_backgroundColor = { 0.1f, 0.1f, 0.1f, 1.0f };

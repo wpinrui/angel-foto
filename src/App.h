@@ -40,6 +40,24 @@ private:
     void ZoomOut();
     void ResetZoom();
 
+    // Phase 2 features
+    void CopyToClipboard();
+    void SetAsWallpaper();
+    void OpenFileDialog();
+    void OpenFolderDialog();
+    void SaveImage();
+    void SaveImageAs();
+    void RotateCW();
+    void RotateCCW();
+    void ToggleCropMode();
+    void ToggleMarkupMode();
+    void ToggleTextMode();
+    void CancelCurrentMode();
+    void ApplyCrop();
+
+    // Image saving helper
+    bool SaveImageToFile(const std::wstring& filePath);
+
     // GIF animation
     void StartGifAnimation();
     void StopGifAnimation();
@@ -71,4 +89,36 @@ private:
     bool m_isNavigating = false;
     DWORD m_lastNavigateTime = 0;
     static const DWORD NAVIGATE_DELAY_MS = 50; // Fast navigation when holding key
+
+    // Rotation state (0, 90, 180, 270 degrees)
+    int m_rotation = 0;
+
+    // Edit modes
+    enum class EditMode { None, Crop, Markup, Text };
+    EditMode m_editMode = EditMode::None;
+
+    // Crop selection
+    bool m_isCropDragging = false;
+    int m_cropStartX = 0;
+    int m_cropStartY = 0;
+    int m_cropEndX = 0;
+    int m_cropEndY = 0;
+
+    // Markup drawing
+    struct MarkupStroke {
+        std::vector<D2D1_POINT_2F> points;
+        D2D1_COLOR_F color;
+        float width;
+    };
+    std::vector<MarkupStroke> m_markupStrokes;
+    bool m_isDrawing = false;
+
+    // Text overlay
+    struct TextOverlay {
+        std::wstring text;
+        float x, y;
+        D2D1_COLOR_F color;
+        float fontSize;
+    };
+    std::vector<TextOverlay> m_textOverlays;
 };

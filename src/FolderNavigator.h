@@ -33,6 +33,9 @@ public:
     // Refresh file list (after external changes)
     void Refresh();
 
+    // Clear all files
+    void Clear();
+
 private:
     void ScanFolder(const std::wstring& folderPath);
 

@@ -84,6 +84,10 @@ void App::OpenFile(const std::wstring& filePath) {
 void App::LoadCurrentImage() {
     StopGifAnimation();
 
+    // Reset rotation when loading new image
+    m_rotation = 0;
+    m_renderer->SetRotation(0);
+
     std::wstring filePath = m_navigator->GetCurrentFilePath();
     if (filePath.empty()) {
         m_currentImage = nullptr;
@@ -137,6 +141,21 @@ void App::UpdateTitle() {
         if (m_currentImage->isAnimated && m_gifPaused) {
             title += L" (paused)";
         }
+    }
+
+    // Add edit mode indicator
+    switch (m_editMode) {
+    case EditMode::Crop:
+        title += L" [CROP - drag to select, Enter to apply, Esc to cancel]";
+        break;
+    case EditMode::Markup:
+        title += L" [MARKUP - drag to draw, Esc to exit]";
+        break;
+    case EditMode::Text:
+        title += L" [TEXT - click to add text, Esc to exit]";
+        break;
+    default:
+        break;
     }
 
     m_window->SetTitle(title);
@@ -255,8 +274,401 @@ void CALLBACK App::GifTimerProc(HWND hwnd, UINT msg, UINT_PTR id, DWORD time) {
     }
 }
 
+// Phase 2 feature implementations
+
+void App::CopyToClipboard() {
+    if (!m_currentImage || !m_currentImage->bitmap) return;
+
+    auto size = m_currentImage->bitmap->GetSize();
+    int width = static_cast<int>(size.width);
+    int height = static_cast<int>(size.height);
+
+    // Create a DIB for the clipboard
+    BITMAPINFOHEADER bi = {};
+    bi.biSize = sizeof(BITMAPINFOHEADER);
+    bi.biWidth = width;
+    bi.biHeight = -height; // Top-down
+    bi.biPlanes = 1;
+    bi.biBitCount = 32;
+    bi.biCompression = BI_RGB;
+
+    size_t imageSize = width * height * 4;
+    HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, sizeof(BITMAPINFOHEADER) + imageSize);
+    if (!hMem) return;
+
+    void* pMem = GlobalLock(hMem);
+    if (!pMem) {
+        GlobalFree(hMem);
+        return;
+    }
+
+    // Copy header
+    memcpy(pMem, &bi, sizeof(BITMAPINFOHEADER));
+
+    // Copy pixel data from D2D bitmap
+    D2D1_MAPPED_RECT mapped;
+    ComPtr<ID2D1Bitmap1> bitmap1;
+
+    // Create a CPU-readable bitmap
+    D2D1_BITMAP_PROPERTIES1 props = D2D1::BitmapProperties1(
+        D2D1_BITMAP_OPTIONS_CPU_READ | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
+        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED)
+    );
+
+    auto dc = m_renderer->GetDeviceContext();
+    HRESULT hr = dc->CreateBitmap(
+        D2D1::SizeU(width, height),
+        nullptr, 0, props, &bitmap1
+    );
+
+    if (SUCCEEDED(hr)) {
+        D2D1_POINT_2U destPoint = {0, 0};
+        D2D1_RECT_U srcRect = {0, 0, (UINT32)width, (UINT32)height};
+        hr = bitmap1->CopyFromBitmap(&destPoint, m_currentImage->bitmap.Get(), &srcRect);
+
+        if (SUCCEEDED(hr)) {
+            hr = bitmap1->Map(D2D1_MAP_OPTIONS_READ, &mapped);
+            if (SUCCEEDED(hr)) {
+                BYTE* dest = static_cast<BYTE*>(pMem) + sizeof(BITMAPINFOHEADER);
+                for (int y = 0; y < height; y++) {
+                    memcpy(dest + y * width * 4,
+                           mapped.bits + y * mapped.pitch,
+                           width * 4);
+                }
+                bitmap1->Unmap();
+            }
+        }
+    }
+
+    GlobalUnlock(hMem);
+
+    if (OpenClipboard(m_window->GetHwnd())) {
+        EmptyClipboard();
+        SetClipboardData(CF_DIB, hMem);
+        CloseClipboard();
+    } else {
+        GlobalFree(hMem);
+    }
+}
+
+void App::SetAsWallpaper() {
+    if (!m_currentImage) return;
+
+    // Save to temp file
+    wchar_t tempPath[MAX_PATH];
+    GetTempPathW(MAX_PATH, tempPath);
+    std::wstring wallpaperPath = std::wstring(tempPath) + L"angel_foto_wallpaper.bmp";
+
+    if (SaveImageToFile(wallpaperPath)) {
+        SystemParametersInfoW(SPI_SETDESKWALLPAPER, 0,
+            const_cast<wchar_t*>(wallpaperPath.c_str()),
+            SPIF_UPDATEINIFILE | SPIF_SENDCHANGE);
+    }
+}
+
+void App::OpenFileDialog() {
+    ComPtr<IFileOpenDialog> dialog;
+    HRESULT hr = CoCreateInstance(CLSID_FileOpenDialog, nullptr,
+        CLSCTX_ALL, IID_PPV_ARGS(&dialog));
+    if (FAILED(hr)) return;
+
+    COMDLG_FILTERSPEC filters[] = {
+        { L"Image Files", L"*.jpg;*.jpeg;*.png;*.bmp;*.gif;*.tiff;*.tif;*.webp;*.heic;*.heif" },
+        { L"All Files", L"*.*" }
+    };
+    dialog->SetFileTypes(ARRAYSIZE(filters), filters);
+
+    hr = dialog->Show(m_window->GetHwnd());
+    if (SUCCEEDED(hr)) {
+        ComPtr<IShellItem> item;
+        hr = dialog->GetResult(&item);
+        if (SUCCEEDED(hr)) {
+            PWSTR filePath;
+            hr = item->GetDisplayName(SIGDN_FILESYSPATH, &filePath);
+            if (SUCCEEDED(hr)) {
+                OpenFile(filePath);
+                CoTaskMemFree(filePath);
+            }
+        }
+    }
+}
+
+void App::OpenFolderDialog() {
+    ComPtr<IFileOpenDialog> dialog;
+    HRESULT hr = CoCreateInstance(CLSID_FileOpenDialog, nullptr,
+        CLSCTX_ALL, IID_PPV_ARGS(&dialog));
+    if (FAILED(hr)) return;
+
+    DWORD options;
+    dialog->GetOptions(&options);
+    dialog->SetOptions(options | FOS_PICKFOLDERS);
+
+    hr = dialog->Show(m_window->GetHwnd());
+    if (SUCCEEDED(hr)) {
+        ComPtr<IShellItem> item;
+        hr = dialog->GetResult(&item);
+        if (SUCCEEDED(hr)) {
+            PWSTR folderPath;
+            hr = item->GetDisplayName(SIGDN_FILESYSPATH, &folderPath);
+            if (SUCCEEDED(hr)) {
+                // Find first image in folder
+                for (const auto& entry : fs::directory_iterator(folderPath)) {
+                    if (ImageLoader::IsSupportedFormat(entry.path().wstring())) {
+                        OpenFile(entry.path().wstring());
+                        break;
+                    }
+                }
+                CoTaskMemFree(folderPath);
+            }
+        }
+    }
+}
+
+void App::SaveImage() {
+    if (!m_currentImage || m_currentImage->filePath.empty()) return;
+    SaveImageToFile(m_currentImage->filePath);
+}
+
+void App::SaveImageAs() {
+    if (!m_currentImage) return;
+
+    ComPtr<IFileSaveDialog> dialog;
+    HRESULT hr = CoCreateInstance(CLSID_FileSaveDialog, nullptr,
+        CLSCTX_ALL, IID_PPV_ARGS(&dialog));
+    if (FAILED(hr)) return;
+
+    COMDLG_FILTERSPEC filters[] = {
+        { L"PNG Image", L"*.png" },
+        { L"JPEG Image", L"*.jpg" },
+        { L"BMP Image", L"*.bmp" }
+    };
+    dialog->SetFileTypes(ARRAYSIZE(filters), filters);
+    dialog->SetDefaultExtension(L"png");
+
+    // Set default filename
+    if (!m_currentImage->filePath.empty()) {
+        fs::path path(m_currentImage->filePath);
+        dialog->SetFileName(path.stem().wstring().c_str());
+    }
+
+    hr = dialog->Show(m_window->GetHwnd());
+    if (SUCCEEDED(hr)) {
+        ComPtr<IShellItem> item;
+        hr = dialog->GetResult(&item);
+        if (SUCCEEDED(hr)) {
+            PWSTR filePath;
+            hr = item->GetDisplayName(SIGDN_FILESYSPATH, &filePath);
+            if (SUCCEEDED(hr)) {
+                SaveImageToFile(filePath);
+                CoTaskMemFree(filePath);
+            }
+        }
+    }
+}
+
+bool App::SaveImageToFile(const std::wstring& filePath) {
+    if (!m_currentImage || !m_currentImage->bitmap) return false;
+
+    auto wicFactory = m_renderer->GetWICFactory();
+    if (!wicFactory) return false;
+
+    auto size = m_currentImage->bitmap->GetSize();
+    int width = static_cast<int>(size.width);
+    int height = static_cast<int>(size.height);
+
+    // Determine encoder based on extension
+    fs::path path(filePath);
+    std::wstring ext = path.extension().wstring();
+    std::transform(ext.begin(), ext.end(), ext.begin(), ::towlower);
+
+    GUID containerFormat;
+    if (ext == L".png") containerFormat = GUID_ContainerFormatPng;
+    else if (ext == L".jpg" || ext == L".jpeg") containerFormat = GUID_ContainerFormatJpeg;
+    else if (ext == L".bmp") containerFormat = GUID_ContainerFormatBmp;
+    else containerFormat = GUID_ContainerFormatPng;
+
+    // Create encoder
+    ComPtr<IWICBitmapEncoder> encoder;
+    HRESULT hr = wicFactory->CreateEncoder(containerFormat, nullptr, &encoder);
+    if (FAILED(hr)) return false;
+
+    // Create stream
+    ComPtr<IWICStream> stream;
+    hr = wicFactory->CreateStream(&stream);
+    if (FAILED(hr)) return false;
+
+    hr = stream->InitializeFromFilename(filePath.c_str(), GENERIC_WRITE);
+    if (FAILED(hr)) return false;
+
+    hr = encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache);
+    if (FAILED(hr)) return false;
+
+    // Create frame
+    ComPtr<IWICBitmapFrameEncode> frame;
+    hr = encoder->CreateNewFrame(&frame, nullptr);
+    if (FAILED(hr)) return false;
+
+    hr = frame->Initialize(nullptr);
+    if (FAILED(hr)) return false;
+
+    hr = frame->SetSize(width, height);
+    if (FAILED(hr)) return false;
+
+    WICPixelFormatGUID pixelFormat = GUID_WICPixelFormat32bppBGRA;
+    hr = frame->SetPixelFormat(&pixelFormat);
+    if (FAILED(hr)) return false;
+
+    // Create a WIC bitmap from D2D bitmap
+    ComPtr<IWICBitmap> wicBitmap;
+    hr = wicFactory->CreateBitmap(width, height, GUID_WICPixelFormat32bppBGRA,
+        WICBitmapCacheOnLoad, &wicBitmap);
+    if (FAILED(hr)) return false;
+
+    // Copy pixels from D2D bitmap
+    ComPtr<ID2D1Bitmap1> bitmap1;
+    D2D1_BITMAP_PROPERTIES1 props = D2D1::BitmapProperties1(
+        D2D1_BITMAP_OPTIONS_CPU_READ | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
+        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED)
+    );
+
+    auto dc = m_renderer->GetDeviceContext();
+    hr = dc->CreateBitmap(D2D1::SizeU(width, height), nullptr, 0, props, &bitmap1);
+    if (FAILED(hr)) return false;
+
+    D2D1_POINT_2U destPoint = {0, 0};
+    D2D1_RECT_U srcRect = {0, 0, (UINT32)width, (UINT32)height};
+    hr = bitmap1->CopyFromBitmap(&destPoint, m_currentImage->bitmap.Get(), &srcRect);
+    if (FAILED(hr)) return false;
+
+    D2D1_MAPPED_RECT mapped;
+    hr = bitmap1->Map(D2D1_MAP_OPTIONS_READ, &mapped);
+    if (FAILED(hr)) return false;
+
+    WICRect wicRect = {0, 0, width, height};
+    ComPtr<IWICBitmapLock> lock;
+    hr = wicBitmap->Lock(&wicRect, WICBitmapLockWrite, &lock);
+    if (SUCCEEDED(hr)) {
+        UINT bufferSize;
+        BYTE* pData;
+        hr = lock->GetDataPointer(&bufferSize, &pData);
+        if (SUCCEEDED(hr)) {
+            UINT stride;
+            lock->GetStride(&stride);
+            for (int y = 0; y < height; y++) {
+                memcpy(pData + y * stride, mapped.bits + y * mapped.pitch, width * 4);
+            }
+        }
+    }
+    bitmap1->Unmap();
+
+    hr = frame->WriteSource(wicBitmap.Get(), nullptr);
+    if (FAILED(hr)) return false;
+
+    hr = frame->Commit();
+    if (FAILED(hr)) return false;
+
+    hr = encoder->Commit();
+    return SUCCEEDED(hr);
+}
+
+void App::RotateCW() {
+    m_rotation = (m_rotation + 90) % 360;
+    m_renderer->SetRotation(m_rotation);
+    InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
+}
+
+void App::RotateCCW() {
+    m_rotation = (m_rotation + 270) % 360;
+    m_renderer->SetRotation(m_rotation);
+    InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
+}
+
+void App::ToggleCropMode() {
+    if (m_editMode == EditMode::Crop) {
+        m_editMode = EditMode::None;
+    } else {
+        m_editMode = EditMode::Crop;
+        m_isCropDragging = false;
+    }
+    m_renderer->SetCropMode(m_editMode == EditMode::Crop);
+    UpdateTitle();
+    InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
+}
+
+void App::ToggleMarkupMode() {
+    if (m_editMode == EditMode::Markup) {
+        m_editMode = EditMode::None;
+    } else {
+        m_editMode = EditMode::Markup;
+    }
+    UpdateTitle();
+    InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
+}
+
+void App::ToggleTextMode() {
+    if (m_editMode == EditMode::Text) {
+        m_editMode = EditMode::None;
+    } else {
+        m_editMode = EditMode::Text;
+    }
+    UpdateTitle();
+    InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
+}
+
+void App::CancelCurrentMode() {
+    m_editMode = EditMode::None;
+    m_isCropDragging = false;
+    m_renderer->SetCropMode(false);
+    m_renderer->SetCropRect(D2D1::RectF(0, 0, 0, 0));
+    UpdateTitle();
+    InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
+}
+
+void App::ApplyCrop() {
+    if (m_editMode != EditMode::Crop || !m_currentImage) return;
+
+    // Get crop rect in image coordinates
+    D2D1_RECT_F cropRect = m_renderer->GetCropRectInImageCoords();
+    if (cropRect.right <= cropRect.left || cropRect.bottom <= cropRect.top) return;
+
+    int cropX = static_cast<int>(cropRect.left);
+    int cropY = static_cast<int>(cropRect.top);
+    int cropW = static_cast<int>(cropRect.right - cropRect.left);
+    int cropH = static_cast<int>(cropRect.bottom - cropRect.top);
+
+    if (cropW <= 0 || cropH <= 0) return;
+
+    auto wicFactory = m_renderer->GetWICFactory();
+    auto dc = m_renderer->GetDeviceContext();
+
+    // Create cropped bitmap
+    D2D1_BITMAP_PROPERTIES1 props = D2D1::BitmapProperties1(
+        D2D1_BITMAP_OPTIONS_TARGET,
+        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED)
+    );
+
+    ComPtr<ID2D1Bitmap1> croppedBitmap;
+    HRESULT hr = dc->CreateBitmap(D2D1::SizeU(cropW, cropH), nullptr, 0, props, &croppedBitmap);
+    if (FAILED(hr)) return;
+
+    D2D1_POINT_2U destPoint = {0, 0};
+    D2D1_RECT_U srcRect = {(UINT32)cropX, (UINT32)cropY, (UINT32)(cropX + cropW), (UINT32)(cropY + cropH)};
+    hr = croppedBitmap->CopyFromBitmap(&destPoint, m_currentImage->bitmap.Get(), &srcRect);
+    if (FAILED(hr)) return;
+
+    // Update current image
+    m_currentImage->bitmap = croppedBitmap;
+    m_currentImage->width = cropW;
+    m_currentImage->height = cropH;
+
+    m_renderer->SetImage(m_currentImage->bitmap);
+    CancelCurrentMode();
+}
+
 void App::OnKeyDown(UINT key) {
     DWORD now = GetTickCount();
+    bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+    bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
 
     switch (key) {
     case VK_RIGHT:
@@ -301,10 +713,18 @@ void App::OnKeyDown(UINT key) {
         break;
 
     case VK_ESCAPE:
-        if (m_window->IsFullscreen()) {
+        if (m_editMode != EditMode::None) {
+            CancelCurrentMode();
+        } else if (m_window->IsFullscreen()) {
             ToggleFullscreen();
         } else {
             PostQuitMessage(0);
+        }
+        break;
+
+    case VK_RETURN:
+        if (m_editMode == EditMode::Crop) {
+            ApplyCrop();
         }
         break;
 
@@ -319,7 +739,7 @@ void App::OnKeyDown(UINT key) {
         break;
 
     case 'F':
-        ResetZoom();
+        if (!ctrl) ResetZoom();
         break;
 
     case '1':
@@ -327,6 +747,62 @@ void App::OnKeyDown(UINT key) {
             std::min(static_cast<float>(m_window->GetWidth()) / m_currentImage->width,
                      static_cast<float>(m_window->GetHeight()) / m_currentImage->height) : 1.0f));
         InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
+        break;
+
+    // Phase 2 shortcuts
+    case 'C':
+        if (ctrl) {
+            CopyToClipboard();
+        } else {
+            ToggleCropMode();
+        }
+        break;
+
+    case 'B':
+        if (ctrl) SetAsWallpaper();
+        break;
+
+    case 'O':
+        if (ctrl) OpenFileDialog();
+        break;
+
+    case 'S':
+        if (ctrl && shift) {
+            SaveImageAs();
+        } else if (ctrl) {
+            SaveImage();
+        }
+        break;
+
+    case 'R':
+        if (shift) {
+            RotateCCW();
+        } else {
+            RotateCW();
+        }
+        break;
+
+    case 'M':
+        ToggleMarkupMode();
+        break;
+
+    case 'T':
+        ToggleTextMode();
+        break;
+
+    case 'Q':
+        if (ctrl) PostQuitMessage(0);
+        break;
+
+    case 'W':
+        if (ctrl) {
+            // Close current image
+            m_currentImage = nullptr;
+            m_renderer->ClearImage();
+            m_navigator->Clear();
+            UpdateTitle();
+            InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
+        }
         break;
     }
 }
@@ -349,20 +825,69 @@ void App::OnMouseWheel(int delta) {
 }
 
 void App::OnMouseDown(int x, int y) {
-    m_isPanning = true;
-    m_lastMouseX = x;
-    m_lastMouseY = y;
-    SetCapture(m_window->GetHwnd());
+    if (m_editMode == EditMode::Crop) {
+        m_isCropDragging = true;
+        m_cropStartX = x;
+        m_cropStartY = y;
+        m_cropEndX = x;
+        m_cropEndY = y;
+        SetCapture(m_window->GetHwnd());
+    } else if (m_editMode == EditMode::Markup) {
+        m_isDrawing = true;
+        MarkupStroke stroke;
+        stroke.color = D2D1::ColorF(D2D1::ColorF::Red);
+        stroke.width = 3.0f;
+        stroke.points.push_back(D2D1::Point2F(static_cast<float>(x), static_cast<float>(y)));
+        m_markupStrokes.push_back(stroke);
+        SetCapture(m_window->GetHwnd());
+    } else if (m_editMode == EditMode::Text) {
+        // Simple text input - would need a dialog for full implementation
+        TextOverlay text;
+        text.x = static_cast<float>(x);
+        text.y = static_cast<float>(y);
+        text.text = L"Text";
+        text.color = D2D1::ColorF(D2D1::ColorF::White);
+        text.fontSize = 24.0f;
+        m_textOverlays.push_back(text);
+        InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
+    } else {
+        m_isPanning = true;
+        m_lastMouseX = x;
+        m_lastMouseY = y;
+        SetCapture(m_window->GetHwnd());
+    }
 }
 
 void App::OnMouseUp(int x, int y) {
     (void)x; (void)y;
-    m_isPanning = false;
-    ReleaseCapture();
+    if (m_isCropDragging) {
+        m_isCropDragging = false;
+        ReleaseCapture();
+    } else if (m_isDrawing) {
+        m_isDrawing = false;
+        ReleaseCapture();
+    } else {
+        m_isPanning = false;
+        ReleaseCapture();
+    }
 }
 
 void App::OnMouseMove(int x, int y) {
-    if (m_isPanning) {
+    if (m_isCropDragging) {
+        m_cropEndX = x;
+        m_cropEndY = y;
+        // Update crop rect in renderer
+        float left = static_cast<float>(std::min(m_cropStartX, m_cropEndX));
+        float top = static_cast<float>(std::min(m_cropStartY, m_cropEndY));
+        float right = static_cast<float>(std::max(m_cropStartX, m_cropEndX));
+        float bottom = static_cast<float>(std::max(m_cropStartY, m_cropEndY));
+        m_renderer->SetCropRect(D2D1::RectF(left, top, right, bottom));
+        InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
+    } else if (m_isDrawing && !m_markupStrokes.empty()) {
+        m_markupStrokes.back().points.push_back(
+            D2D1::Point2F(static_cast<float>(x), static_cast<float>(y)));
+        InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
+    } else if (m_isPanning) {
         float dx = static_cast<float>(x - m_lastMouseX);
         float dy = static_cast<float>(y - m_lastMouseY);
 

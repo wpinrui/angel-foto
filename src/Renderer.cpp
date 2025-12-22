@@ -241,6 +241,54 @@ void Renderer::ResetView() {
     m_panY = 0.0f;
 }
 
+void Renderer::SetRotation(int degrees) {
+    m_rotation = degrees % 360;
+}
+
+void Renderer::SetCropMode(bool enabled) {
+    m_cropMode = enabled;
+    if (!enabled) {
+        m_cropRect = { 0, 0, 0, 0 };
+    }
+
+    // Create brushes for crop overlay if needed
+    if (enabled && !m_cropBrush && m_deviceContext) {
+        m_deviceContext->CreateSolidColorBrush(
+            D2D1::ColorF(D2D1::ColorF::White), &m_cropBrush);
+        m_deviceContext->CreateSolidColorBrush(
+            D2D1::ColorF(0, 0, 0, 0.5f), &m_cropDimBrush);
+    }
+}
+
+void Renderer::SetCropRect(D2D1_RECT_F rect) {
+    m_cropRect = rect;
+}
+
+D2D1_RECT_F Renderer::GetCropRectInImageCoords() const {
+    if (!m_currentImage) return { 0, 0, 0, 0 };
+
+    // Get the image rect in screen coordinates
+    D2D1_RECT_F imageRect = const_cast<Renderer*>(this)->CalculateImageRect();
+
+    // Convert screen crop rect to image coordinates
+    float scaleX = m_currentImage->GetSize().width / (imageRect.right - imageRect.left);
+    float scaleY = m_currentImage->GetSize().height / (imageRect.bottom - imageRect.top);
+
+    D2D1_RECT_F result;
+    result.left = (m_cropRect.left - imageRect.left) * scaleX;
+    result.top = (m_cropRect.top - imageRect.top) * scaleY;
+    result.right = (m_cropRect.right - imageRect.left) * scaleX;
+    result.bottom = (m_cropRect.bottom - imageRect.top) * scaleY;
+
+    // Clamp to image bounds
+    result.left = std::max(0.0f, std::min(result.left, m_currentImage->GetSize().width));
+    result.top = std::max(0.0f, std::min(result.top, m_currentImage->GetSize().height));
+    result.right = std::max(0.0f, std::min(result.right, m_currentImage->GetSize().width));
+    result.bottom = std::max(0.0f, std::min(result.bottom, m_currentImage->GetSize().height));
+
+    return result;
+}
+
 D2D1_RECT_F Renderer::CalculateImageRect() {
     if (!m_currentImage) {
         return D2D1::RectF(0, 0, 0, 0);
@@ -249,6 +297,11 @@ D2D1_RECT_F Renderer::CalculateImageRect() {
     auto imageSize = m_currentImage->GetSize();
     float imageWidth = imageSize.width;
     float imageHeight = imageSize.height;
+
+    // Swap dimensions for 90/270 degree rotations
+    if (m_rotation == 90 || m_rotation == 270) {
+        std::swap(imageWidth, imageHeight);
+    }
 
     // Calculate scale to fit image in window while preserving aspect ratio
     float scaleX = static_cast<float>(m_width) / imageWidth;
@@ -276,6 +329,27 @@ void Renderer::Render() {
     if (m_currentImage) {
         D2D1_RECT_F destRect = CalculateImageRect();
 
+        // Apply rotation transform
+        if (m_rotation != 0) {
+            float centerX = (destRect.left + destRect.right) / 2.0f;
+            float centerY = (destRect.top + destRect.bottom) / 2.0f;
+            m_deviceContext->SetTransform(
+                D2D1::Matrix3x2F::Rotation(static_cast<float>(m_rotation),
+                    D2D1::Point2F(centerX, centerY))
+            );
+
+            // Adjust destRect for rotated image
+            auto imageSize = m_currentImage->GetSize();
+            if (m_rotation == 90 || m_rotation == 270) {
+                float w = destRect.right - destRect.left;
+                float h = destRect.bottom - destRect.top;
+                destRect = D2D1::RectF(
+                    centerX - h / 2, centerY - w / 2,
+                    centerX + h / 2, centerY + w / 2
+                );
+            }
+        }
+
         // Use high quality interpolation for better image quality
         m_deviceContext->DrawBitmap(
             m_currentImage.Get(),
@@ -283,6 +357,35 @@ void Renderer::Render() {
             1.0f,
             D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC
         );
+
+        // Reset transform
+        m_deviceContext->SetTransform(D2D1::Matrix3x2F::Identity());
+
+        // Draw crop overlay if in crop mode
+        if (m_cropMode && m_cropBrush && m_cropDimBrush) {
+            // Dim area outside crop rect
+            if (m_cropRect.right > m_cropRect.left && m_cropRect.bottom > m_cropRect.top) {
+                // Top region
+                m_deviceContext->FillRectangle(
+                    D2D1::RectF(0, 0, static_cast<float>(m_width), m_cropRect.top),
+                    m_cropDimBrush.Get());
+                // Bottom region
+                m_deviceContext->FillRectangle(
+                    D2D1::RectF(0, m_cropRect.bottom, static_cast<float>(m_width), static_cast<float>(m_height)),
+                    m_cropDimBrush.Get());
+                // Left region
+                m_deviceContext->FillRectangle(
+                    D2D1::RectF(0, m_cropRect.top, m_cropRect.left, m_cropRect.bottom),
+                    m_cropDimBrush.Get());
+                // Right region
+                m_deviceContext->FillRectangle(
+                    D2D1::RectF(m_cropRect.right, m_cropRect.top, static_cast<float>(m_width), m_cropRect.bottom),
+                    m_cropDimBrush.Get());
+
+                // Draw crop border
+                m_deviceContext->DrawRectangle(m_cropRect, m_cropBrush.Get(), 2.0f);
+            }
+        }
     }
 
     HRESULT hr = m_deviceContext->EndDraw();

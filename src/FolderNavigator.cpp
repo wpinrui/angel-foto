@@ -188,3 +188,9 @@ void FolderNavigator::Refresh() {
         m_currentIndex = m_imageFiles.size() - 1;
     }
 }
+
+void FolderNavigator::Clear() {
+    m_imageFiles.clear();
+    m_currentIndex = 0;
+    m_currentFolder.clear();
+}

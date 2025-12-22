@@ -88,15 +88,15 @@ Or drag-drop an image onto the executable.
 - [x] Zoom/pan with mouse wheel and drag
 - [x] Delete to recycle bin
 
-### Phase 2: Core Features
-- [ ] Set as wallpaper (Ctrl+B)
-- [ ] Rotate 90° CW/CCW
-- [ ] Crop with drag selection
-- [ ] Markup/drawing mode
-- [ ] Text overlay
-- [ ] Copy to clipboard (Ctrl+C)
-- [ ] Open file/folder dialogs
-- [ ] Save/Save As
+### Phase 2: Core Features - Done
+- [x] Set as wallpaper (Ctrl+B)
+- [x] Rotate 90° CW/CCW (R/Shift+R)
+- [x] Crop with drag selection (C to toggle, Enter to apply)
+- [x] Markup/drawing mode (M)
+- [x] Text overlay (T)
+- [x] Copy to clipboard (Ctrl+C)
+- [x] Open file/folder dialogs (Ctrl+O, Ctrl+F)
+- [x] Save/Save As (Ctrl+S, Ctrl+Shift+S)
 
 ### Phase 3: Polish & Distribution
 - [ ] Floating toolbar (auto-hide)
