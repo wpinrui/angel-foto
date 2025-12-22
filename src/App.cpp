@@ -352,17 +352,23 @@ void App::CopyToClipboard() {
 }
 
 void App::SetAsWallpaper() {
-    if (!m_currentImage) return;
+    if (!m_currentImage || m_currentImage->filePath.empty()) return;
 
-    // Save to temp file
+    // Copy original file to temp location (Windows wallpaper API works best with BMP/JPG)
     wchar_t tempPath[MAX_PATH];
     GetTempPathW(MAX_PATH, tempPath);
-    std::wstring wallpaperPath = std::wstring(tempPath) + L"angel_foto_wallpaper.bmp";
 
-    if (SaveImageToFile(wallpaperPath)) {
+    fs::path srcPath(m_currentImage->filePath);
+    std::wstring ext = srcPath.extension().wstring();
+    std::wstring wallpaperPath = std::wstring(tempPath) + L"angel_foto_wallpaper" + ext;
+
+    try {
+        fs::copy_file(m_currentImage->filePath, wallpaperPath, fs::copy_options::overwrite_existing);
         SystemParametersInfoW(SPI_SETDESKWALLPAPER, 0,
             const_cast<wchar_t*>(wallpaperPath.c_str()),
             SPIF_UPDATEINIFILE | SPIF_SENDCHANGE);
+    } catch (...) {
+        // Copy failed
     }
 }
 
