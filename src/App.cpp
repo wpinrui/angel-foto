@@ -436,26 +436,26 @@ void App::SaveImage() {
 }
 
 void App::SaveImageAs() {
-    if (!m_currentImage) return;
+    if (!m_currentImage || m_currentImage->filePath.empty()) return;
 
     ComPtr<IFileSaveDialog> dialog;
     HRESULT hr = CoCreateInstance(CLSID_FileSaveDialog, nullptr,
         CLSCTX_ALL, IID_PPV_ARGS(&dialog));
     if (FAILED(hr)) return;
 
+    // Get original extension
+    fs::path srcPath(m_currentImage->filePath);
+    std::wstring srcExt = srcPath.extension().wstring();
+
     COMDLG_FILTERSPEC filters[] = {
         { L"PNG Image", L"*.png" },
         { L"JPEG Image", L"*.jpg" },
-        { L"BMP Image", L"*.bmp" }
+        { L"BMP Image", L"*.bmp" },
+        { L"All Files", L"*.*" }
     };
     dialog->SetFileTypes(ARRAYSIZE(filters), filters);
-    dialog->SetDefaultExtension(L"png");
-
-    // Set default filename
-    if (!m_currentImage->filePath.empty()) {
-        fs::path path(m_currentImage->filePath);
-        dialog->SetFileName(path.stem().wstring().c_str());
-    }
+    dialog->SetDefaultExtension(srcExt.empty() ? L"png" : srcExt.c_str() + 1);
+    dialog->SetFileName(srcPath.stem().wstring().c_str());
 
     hr = dialog->Show(m_window->GetHwnd());
     if (SUCCEEDED(hr)) {
@@ -465,7 +465,12 @@ void App::SaveImageAs() {
             PWSTR filePath;
             hr = item->GetDisplayName(SIGDN_FILESYSPATH, &filePath);
             if (SUCCEEDED(hr)) {
-                SaveImageToFile(filePath);
+                // Copy original file to new location
+                try {
+                    fs::copy_file(m_currentImage->filePath, filePath, fs::copy_options::overwrite_existing);
+                } catch (...) {
+                    // Copy failed
+                }
                 CoTaskMemFree(filePath);
             }
         }
