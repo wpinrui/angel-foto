@@ -12,17 +12,40 @@ A fast, minimal photo viewer for Windows. Built to fix the pain points of the de
 
 ## Keyboard Shortcuts
 
+### Navigation
 | Key | Action |
 |-----|--------|
 | Left/Right | Previous/Next image |
 | Home/End | First/Last image |
 | Space | Pause/play GIF |
+
+### View
+| Key | Action |
+|-----|--------|
 | F | Fit to window |
 | 1 | Actual size (100%) |
 | +/- or Scroll | Zoom in/out |
-| Delete | Delete file (recycle bin) |
 | F11 | Toggle fullscreen |
-| Esc | Exit fullscreen / Close |
+
+### File
+| Key | Action |
+|-----|--------|
+| Ctrl+O | Open image |
+| Ctrl+F | Open folder |
+| Ctrl+S | Save image |
+| Ctrl+Shift+S | Save as |
+| Ctrl+W | Close image |
+| Ctrl+Q | Quit |
+| Delete | Delete file (recycle bin) |
+
+### Edit
+| Key | Action |
+|-----|--------|
+| Ctrl+C | Copy image |
+| Ctrl+B | Set as wallpaper |
+| M | Markup (draw) mode |
+| T | Text markup mode |
+| Esc | Exit markup mode / Close |
 
 ## Building
 
