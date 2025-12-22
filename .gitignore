@@ -1,0 +1,19 @@
+CLAUDE.md
+.claude/*
+
+# Build
+build/
+out/
+*.exe
+*.obj
+*.pdb
+*.ilk
+
+# Visual Studio
+.vs/
+*.vcxproj.user
+*.suo
+
+# CMake
+CMakeCache.txt
+CMakeFiles/

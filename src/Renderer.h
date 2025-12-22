@@ -1,0 +1,58 @@
+#pragma once
+#include "pch.h"
+
+class Renderer {
+public:
+    Renderer();
+    ~Renderer();
+
+    bool Initialize(HWND hwnd);
+    void Resize(int width, int height);
+    void Render();
+
+    // Set the current image to display
+    void SetImage(ComPtr<ID2D1Bitmap> bitmap);
+    void ClearImage();
+
+    // Zoom and pan
+    void SetZoom(float zoom);
+    void SetPan(float panX, float panY);
+    void AddPan(float dx, float dy);
+    void ResetView();
+    float GetZoom() const { return m_zoom; }
+    float GetPanX() const { return m_panX; }
+    float GetPanY() const { return m_panY; }
+
+    // Get Direct2D factory (for creating bitmaps)
+    ID2D1Factory1* GetFactory() const { return m_factory.Get(); }
+    ID2D1DeviceContext* GetDeviceContext() const { return m_deviceContext.Get(); }
+    IWICImagingFactory* GetWICFactory() const { return m_wicFactory.Get(); }
+
+private:
+    void CreateDeviceResources();
+    void DiscardDeviceResources();
+    D2D1_RECT_F CalculateImageRect();
+
+    HWND m_hwnd = nullptr;
+    int m_width = 0;
+    int m_height = 0;
+
+    // Direct2D resources
+    ComPtr<ID2D1Factory1> m_factory;
+    ComPtr<ID2D1Device> m_device;
+    ComPtr<ID2D1DeviceContext> m_deviceContext;
+    ComPtr<IDXGISwapChain1> m_swapChain;
+    ComPtr<ID2D1Bitmap1> m_targetBitmap;
+
+    // WIC
+    ComPtr<IWICImagingFactory> m_wicFactory;
+
+    // Current image
+    ComPtr<ID2D1Bitmap> m_currentImage;
+    float m_zoom = 1.0f;
+    float m_panX = 0.0f;
+    float m_panY = 0.0f;
+
+    // Background color (dark)
+    D2D1_COLOR_F m_backgroundColor = { 0.1f, 0.1f, 0.1f, 1.0f };
+};
