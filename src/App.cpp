@@ -431,7 +431,10 @@ void App::OpenFolderDialog() {
 }
 
 void App::SaveImage() {
-    if (!m_currentImage || m_currentImage->filePath.empty()) return;
+    if (!m_currentImage || m_currentImage->filePath.empty()) {
+        MessageBoxW(m_window->GetHwnd(), L"No image loaded", L"Save Error", MB_OK);
+        return;
+    }
 
     fs::path origPath(m_currentImage->filePath);
     fs::path tempPath = origPath.parent_path() / (L"~temp_" + origPath.filename().wstring());
@@ -440,7 +443,12 @@ void App::SaveImage() {
     // Save to temp file
     bool saved = SaveImageToFile(tempPath.wstring());
 
-    if (saved) {
+    if (!saved) {
+        MessageBoxW(m_window->GetHwnd(), L"SaveImageToFile failed", L"Save Error", MB_OK);
+        return;
+    }
+
+    {
         // Release current image so original file isn't locked
         m_currentImage->bitmap.Reset();
         m_currentImage = nullptr;
