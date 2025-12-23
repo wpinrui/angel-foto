@@ -496,12 +496,8 @@ void App::SaveImageAs() {
             PWSTR filePath;
             hr = item->GetDisplayName(SIGDN_FILESYSPATH, &filePath);
             if (SUCCEEDED(hr)) {
-                // Copy original file to new location
-                try {
-                    fs::copy_file(m_currentImage->filePath, filePath, fs::copy_options::overwrite_existing);
-                } catch (...) {
-                    // Copy failed
-                }
+                // Save with transformations applied
+                SaveImageToFile(filePath);
                 CoTaskMemFree(filePath);
             }
         }
