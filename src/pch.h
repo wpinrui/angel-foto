@@ -27,6 +27,7 @@ using Microsoft::WRL::ComPtr;
 #include <memory>
 #include <filesystem>
 #include <algorithm>
+#include <cfloat>
 #include <thread>
 #include <mutex>
 #include <atomic>

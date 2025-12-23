@@ -63,6 +63,7 @@ private:
     // Update renderer with current markup/text
     void UpdateRendererMarkup();
     void UpdateRendererText();
+    void EraseAtPoint(int x, int y);
 
     // GIF animation
     void StartGifAnimation();
@@ -122,6 +123,7 @@ private:
     };
     std::vector<MarkupStroke> m_markupStrokes;
     bool m_isDrawing = false;
+    bool m_isErasing = false;
 
     // Text overlay
     struct TextOverlay {

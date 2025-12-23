@@ -843,6 +843,58 @@ void App::UpdateRendererText() {
     m_renderer->SetTextOverlays(rendererTexts);
 }
 
+void App::EraseAtPoint(int x, int y) {
+    D2D1_RECT_F imageRect = m_renderer->GetScreenImageRect();
+    float imageW = imageRect.right - imageRect.left;
+    float imageH = imageRect.bottom - imageRect.top;
+
+    if (imageW <= 0 || imageH <= 0) return;
+
+    float normX = (static_cast<float>(x) - imageRect.left) / imageW;
+    float normY = (static_cast<float>(y) - imageRect.top) / imageH;
+    float hitRadius = 30.0f / std::min(imageW, imageH);
+
+    bool erased = false;
+
+    // Check strokes for hit - erase any stroke that intersects
+    for (auto it = m_markupStrokes.begin(); it != m_markupStrokes.end(); ) {
+        bool hit = false;
+        for (const auto& pt : it->points) {
+            float dx = pt.x - normX;
+            float dy = pt.y - normY;
+            if (dx * dx + dy * dy < hitRadius * hitRadius) {
+                hit = true;
+                break;
+            }
+        }
+        if (hit) {
+            it = m_markupStrokes.erase(it);
+            erased = true;
+        } else {
+            ++it;
+        }
+    }
+
+    // Check text overlays for hit
+    for (auto it = m_textOverlays.begin(); it != m_textOverlays.end(); ) {
+        float dx = it->x - normX;
+        float dy = it->y - normY;
+        // Text hit box - check if click is near text origin
+        if (dx > -hitRadius && dx < 0.2f && dy > -hitRadius && dy < hitRadius * 2) {
+            it = m_textOverlays.erase(it);
+            erased = true;
+        } else {
+            ++it;
+        }
+    }
+
+    if (erased) {
+        UpdateRendererMarkup();
+        UpdateRendererText();
+        InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
+    }
+}
+
 void App::ApplyCrop() {
     if (m_editMode != EditMode::Crop || !m_currentImage) return;
 
@@ -1145,50 +1197,11 @@ void App::OnMouseDown(int x, int y) {
             InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
         }
     } else if (m_editMode == EditMode::Erase) {
-        // Convert screen coords to normalized image coords
-        D2D1_RECT_F imageRect = m_renderer->GetScreenImageRect();
-        float imageW = imageRect.right - imageRect.left;
-        float imageH = imageRect.bottom - imageRect.top;
-        if (imageW > 0 && imageH > 0) {
-            float normX = (static_cast<float>(x) - imageRect.left) / imageW;
-            float normY = (static_cast<float>(y) - imageRect.top) / imageH;
-            float hitRadius = 20.0f / imageW;  // Hit radius in normalized coords
-
-            // Check strokes for hit
-            bool erased = false;
-            for (auto it = m_markupStrokes.begin(); it != m_markupStrokes.end(); ++it) {
-                for (const auto& pt : it->points) {
-                    float dx = pt.x - normX;
-                    float dy = pt.y - normY;
-                    if (dx * dx + dy * dy < hitRadius * hitRadius) {
-                        m_markupStrokes.erase(it);
-                        UpdateRendererMarkup();
-                        erased = true;
-                        break;
-                    }
-                }
-                if (erased) break;
-            }
-
-            // Check text overlays for hit if no stroke was erased
-            if (!erased) {
-                for (auto it = m_textOverlays.begin(); it != m_textOverlays.end(); ++it) {
-                    float dx = it->x - normX;
-                    float dy = it->y - normY;
-                    // Text hit box is wider
-                    if (dx > -hitRadius && dx < 0.2f && dy > -hitRadius && dy < hitRadius * 2) {
-                        m_textOverlays.erase(it);
-                        UpdateRendererText();
-                        erased = true;
-                        break;
-                    }
-                }
-            }
-
-            if (erased) {
-                InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
-            }
-        }
+        // Start erasing - will continue to erase as mouse drags
+        m_isErasing = true;
+        SetCapture(m_window->GetHwnd());
+        // Erase at initial click position
+        EraseAtPoint(x, y);
     } else {
         m_isPanning = true;
         m_lastMouseX = x;
@@ -1204,6 +1217,9 @@ void App::OnMouseUp(int x, int y) {
         ReleaseCapture();
     } else if (m_isDrawing) {
         m_isDrawing = false;
+        ReleaseCapture();
+    } else if (m_isErasing) {
+        m_isErasing = false;
         ReleaseCapture();
     } else {
         m_isPanning = false;
@@ -1234,6 +1250,9 @@ void App::OnMouseMove(int x, int y) {
             UpdateRendererMarkup();
             InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
         }
+    } else if (m_isErasing) {
+        // Continue erasing as mouse drags
+        EraseAtPoint(x, y);
     } else if (m_isPanning) {
         float dx = static_cast<float>(x - m_lastMouseX);
         float dy = static_cast<float>(y - m_lastMouseY);
