@@ -620,83 +620,75 @@ bool App::SaveImageToFile(const std::wstring& filePath) {
         stride, (UINT)buffer.size(), buffer.data(), &wicBitmap);
     if (FAILED(hr)) return false;
 
-    // Draw overlays if needed (convert screen coords to image coords)
+    // Draw overlays if needed (strokes are in normalized 0-1 coords)
     if (hasOverlays) {
-        // Get screen-to-image transform from current view
-        D2D1_RECT_F screenImageRect = m_renderer->GetScreenImageRect();
-        float screenW = screenImageRect.right - screenImageRect.left;
-        float screenH = screenImageRect.bottom - screenImageRect.top;
-
-        // Scale factor: screen coords to output image coords
-        float scaleX = (screenW > 0) ? (float)width / screenW : 1.0f;
-        float scaleY = (screenH > 0) ? (float)height / screenH : 1.0f;
-        float offsetX = screenImageRect.left;
-        float offsetY = screenImageRect.top;
-
-        // DEBUG: Log values
-        wchar_t dbg[512];
-        swprintf_s(dbg, L"Strokes: %zu\nScreenRect: %.0f,%.0f,%.0f,%.0f\nScale: %.2f,%.2f\nOutput: %ux%u",
-            m_markupStrokes.size(), screenImageRect.left, screenImageRect.top, screenImageRect.right, screenImageRect.bottom,
-            scaleX, scaleY, width, height);
-        MessageBoxW(nullptr, dbg, L"Markup Debug", MB_OK);
-
         ComPtr<ID2D1RenderTarget> rt;
         D2D1_RENDER_TARGET_PROPERTIES rtProps = D2D1::RenderTargetProperties(
             D2D1_RENDER_TARGET_TYPE_DEFAULT,
             D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED)
         );
         hr = d2dFactory->CreateWicBitmapRenderTarget(wicBitmap.Get(), rtProps, &rt);
-        if (FAILED(hr)) {
-            MessageBoxW(nullptr, L"CreateWicBitmapRenderTarget FAILED", L"Error", MB_OK);
-        }
-        if (SUCCEEDED(hr)) {
-            rt->BeginDraw();
+        if (FAILED(hr)) return false;
 
-            for (const auto& stroke : m_markupStrokes) {
-                if (stroke.points.size() < 2) continue;
+        rt->BeginDraw();
+
+        // Draw markup strokes (normalized coords scaled to output size)
+        float outW = static_cast<float>(width);
+        float outH = static_cast<float>(height);
+
+        for (const auto& stroke : m_markupStrokes) {
+            if (stroke.points.size() < 2) continue;
+            ComPtr<ID2D1SolidColorBrush> brush;
+            rt->CreateSolidColorBrush(stroke.color, &brush);
+            if (!brush) continue;
+
+            // Stroke width is normalized, scale to output width
+            float strokeWidth = stroke.width * outW;
+
+            for (size_t i = 1; i < stroke.points.size(); ++i) {
+                // Scale normalized coords to output pixel coords
+                D2D1_POINT_2F p1 = {
+                    stroke.points[i - 1].x * outW,
+                    stroke.points[i - 1].y * outH
+                };
+                D2D1_POINT_2F p2 = {
+                    stroke.points[i].x * outW,
+                    stroke.points[i].y * outH
+                };
+                rt->DrawLine(p1, p2, brush.Get(), strokeWidth);
+            }
+        }
+
+        // Draw text overlays (still in screen coords - TODO: normalize these too)
+        ComPtr<IDWriteFactory> dwriteFactory;
+        DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED,
+            __uuidof(IDWriteFactory), reinterpret_cast<IUnknown**>(dwriteFactory.GetAddressOf()));
+        if (dwriteFactory) {
+            D2D1_RECT_F screenImageRect = m_renderer->GetScreenImageRect();
+            float screenW = screenImageRect.right - screenImageRect.left;
+            float screenH = screenImageRect.bottom - screenImageRect.top;
+            float scaleX = (screenW > 0) ? outW / screenW : 1.0f;
+            float scaleY = (screenH > 0) ? outH / screenH : 1.0f;
+
+            for (const auto& text : m_textOverlays) {
+                ComPtr<IDWriteTextFormat> textFormat;
+                float scaledFontSize = text.fontSize * scaleX;
+                dwriteFactory->CreateTextFormat(L"Segoe UI", nullptr,
+                    DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+                    scaledFontSize, L"en-us", &textFormat);
+                if (!textFormat) continue;
                 ComPtr<ID2D1SolidColorBrush> brush;
-                rt->CreateSolidColorBrush(stroke.color, &brush);
+                rt->CreateSolidColorBrush(text.color, &brush);
                 if (!brush) continue;
-                for (size_t i = 1; i < stroke.points.size(); ++i) {
-                    // Transform from screen to image coordinates
-                    D2D1_POINT_2F p1 = {
-                        (stroke.points[i - 1].x - offsetX) * scaleX,
-                        (stroke.points[i - 1].y - offsetY) * scaleY
-                    };
-                    D2D1_POINT_2F p2 = {
-                        (stroke.points[i].x - offsetX) * scaleX,
-                        (stroke.points[i].y - offsetY) * scaleY
-                    };
-                    rt->DrawLine(p1, p2, brush.Get(), stroke.width * scaleX);
-                }
-            }
-
-            ComPtr<IDWriteFactory> dwriteFactory;
-            DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED,
-                __uuidof(IDWriteFactory), reinterpret_cast<IUnknown**>(dwriteFactory.GetAddressOf()));
-            if (dwriteFactory) {
-                for (const auto& text : m_textOverlays) {
-                    ComPtr<IDWriteTextFormat> textFormat;
-                    float scaledFontSize = text.fontSize * scaleX;
-                    dwriteFactory->CreateTextFormat(L"Segoe UI", nullptr,
-                        DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
-                        scaledFontSize, L"en-us", &textFormat);
-                    if (!textFormat) continue;
-                    ComPtr<ID2D1SolidColorBrush> brush;
-                    rt->CreateSolidColorBrush(text.color, &brush);
-                    if (!brush) continue;
-                    float tx = (text.x - offsetX) * scaleX;
-                    float ty = (text.y - offsetY) * scaleY;
-                    rt->DrawText(text.text.c_str(), (UINT32)text.text.length(), textFormat.Get(),
-                        D2D1::RectF(tx, ty, (float)width, (float)height), brush.Get());
-                }
-            }
-
-            hr = rt->EndDraw();
-            if (FAILED(hr)) {
-                MessageBoxW(nullptr, L"EndDraw FAILED", L"Error", MB_OK);
+                float tx = (text.x - screenImageRect.left) * scaleX;
+                float ty = (text.y - screenImageRect.top) * scaleY;
+                rt->DrawText(text.text.c_str(), (UINT32)text.text.length(), textFormat.Get(),
+                    D2D1::RectF(tx, ty, outW, outH), brush.Get());
             }
         }
+
+        hr = rt->EndDraw();
+        if (FAILED(hr)) return false;
     }
 
     // Create encoder
@@ -1031,14 +1023,23 @@ void App::OnMouseDown(int x, int y) {
         m_cropEndY = y;
         SetCapture(m_window->GetHwnd());
     } else if (m_editMode == EditMode::Markup) {
-        m_isDrawing = true;
-        MarkupStroke stroke;
-        stroke.color = D2D1::ColorF(D2D1::ColorF::Red);
-        stroke.width = 3.0f;
-        stroke.points.push_back(D2D1::Point2F(static_cast<float>(x), static_cast<float>(y)));
-        m_markupStrokes.push_back(stroke);
-        UpdateRendererMarkup();
-        SetCapture(m_window->GetHwnd());
+        // Convert screen coords to normalized image coords (0-1 range)
+        D2D1_RECT_F imageRect = m_renderer->GetScreenImageRect();
+        float imageW = imageRect.right - imageRect.left;
+        float imageH = imageRect.bottom - imageRect.top;
+        if (imageW > 0 && imageH > 0) {
+            float normX = (static_cast<float>(x) - imageRect.left) / imageW;
+            float normY = (static_cast<float>(y) - imageRect.top) / imageH;
+
+            m_isDrawing = true;
+            MarkupStroke stroke;
+            stroke.color = D2D1::ColorF(D2D1::ColorF::Red);
+            stroke.width = 3.0f / imageW;  // Normalize stroke width too
+            stroke.points.push_back(D2D1::Point2F(normX, normY));
+            m_markupStrokes.push_back(stroke);
+            UpdateRendererMarkup();
+            SetCapture(m_window->GetHwnd());
+        }
     } else if (m_editMode == EditMode::Text) {
         // Simple text input - would need a dialog for full implementation
         TextOverlay text;
@@ -1083,10 +1084,17 @@ void App::OnMouseMove(int x, int y) {
         m_renderer->SetCropRect(D2D1::RectF(left, top, right, bottom));
         InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
     } else if (m_isDrawing && !m_markupStrokes.empty()) {
-        m_markupStrokes.back().points.push_back(
-            D2D1::Point2F(static_cast<float>(x), static_cast<float>(y)));
-        UpdateRendererMarkup();
-        InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
+        // Convert screen coords to normalized image coords
+        D2D1_RECT_F imageRect = m_renderer->GetScreenImageRect();
+        float imageW = imageRect.right - imageRect.left;
+        float imageH = imageRect.bottom - imageRect.top;
+        if (imageW > 0 && imageH > 0) {
+            float normX = (static_cast<float>(x) - imageRect.left) / imageW;
+            float normY = (static_cast<float>(y) - imageRect.top) / imageH;
+            m_markupStrokes.back().points.push_back(D2D1::Point2F(normX, normY));
+            UpdateRendererMarkup();
+            InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
+        }
     } else if (m_isPanning) {
         float dx = static_cast<float>(x - m_lastMouseX);
         float dy = static_cast<float>(y - m_lastMouseY);

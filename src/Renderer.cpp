@@ -369,7 +369,11 @@ void Renderer::Render() {
         // Reset transform
         m_deviceContext->SetTransform(D2D1::Matrix3x2F::Identity());
 
-        // Draw markup strokes
+        // Draw markup strokes (strokes are in normalized 0-1 image coords)
+        D2D1_RECT_F screenRect = CalculateImageRect();
+        float screenW = screenRect.right - screenRect.left;
+        float screenH = screenRect.bottom - screenRect.top;
+
         for (const auto& stroke : m_markupStrokes) {
             if (stroke.points.size() < 2) continue;
 
@@ -377,8 +381,20 @@ void Renderer::Render() {
             m_deviceContext->CreateSolidColorBrush(stroke.color, &brush);
             if (!brush) continue;
 
+            // Convert normalized stroke width to screen pixels
+            float screenStrokeWidth = stroke.width * screenW;
+
             for (size_t i = 1; i < stroke.points.size(); ++i) {
-                m_deviceContext->DrawLine(stroke.points[i - 1], stroke.points[i], brush.Get(), stroke.width);
+                // Convert normalized coords to screen coords
+                D2D1_POINT_2F p1 = {
+                    screenRect.left + stroke.points[i - 1].x * screenW,
+                    screenRect.top + stroke.points[i - 1].y * screenH
+                };
+                D2D1_POINT_2F p2 = {
+                    screenRect.left + stroke.points[i].x * screenW,
+                    screenRect.top + stroke.points[i].y * screenH
+                };
+                m_deviceContext->DrawLine(p1, p2, brush.Get(), screenStrokeWidth);
             }
         }
 
