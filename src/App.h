@@ -53,6 +53,7 @@ private:
     void ToggleCropMode();
     void ToggleMarkupMode();
     void ToggleTextMode();
+    void ToggleEraseMode();
     void CancelCurrentMode();
     void ApplyCrop();
 
@@ -99,7 +100,7 @@ private:
     int m_rotation = 0;
 
     // Edit modes
-    enum class EditMode { None, Crop, Markup, Text };
+    enum class EditMode { None, Crop, Markup, Text, Erase };
     EditMode m_editMode = EditMode::None;
 
     // Crop selection

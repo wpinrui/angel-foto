@@ -158,6 +158,9 @@ void App::UpdateTitle() {
     case EditMode::Text:
         title += L" [TEXT - click to add text, Esc to exit]";
         break;
+    case EditMode::Erase:
+        title += L" [ERASE - click on markup/text to delete, Esc to exit]";
+        break;
     default:
         break;
     }
@@ -780,6 +783,16 @@ void App::ToggleTextMode() {
     InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
 }
 
+void App::ToggleEraseMode() {
+    if (m_editMode == EditMode::Erase) {
+        m_editMode = EditMode::None;
+    } else {
+        m_editMode = EditMode::Erase;
+    }
+    UpdateTitle();
+    InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
+}
+
 void App::CancelCurrentMode() {
     m_editMode = EditMode::None;
     m_isCropDragging = false;
@@ -1042,6 +1055,10 @@ void App::OnKeyDown(UINT key) {
         ToggleTextMode();
         break;
 
+    case 'E':
+        ToggleEraseMode();
+        break;
+
     case 'Q':
         if (ctrl) PostQuitMessage(0);
         break;
@@ -1126,6 +1143,51 @@ void App::OnMouseDown(int x, int y) {
             m_editingTextY = (static_cast<float>(y) - imageRect.top) / imageH;
             UpdateRendererText();
             InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
+        }
+    } else if (m_editMode == EditMode::Erase) {
+        // Convert screen coords to normalized image coords
+        D2D1_RECT_F imageRect = m_renderer->GetScreenImageRect();
+        float imageW = imageRect.right - imageRect.left;
+        float imageH = imageRect.bottom - imageRect.top;
+        if (imageW > 0 && imageH > 0) {
+            float normX = (static_cast<float>(x) - imageRect.left) / imageW;
+            float normY = (static_cast<float>(y) - imageRect.top) / imageH;
+            float hitRadius = 20.0f / imageW;  // Hit radius in normalized coords
+
+            // Check strokes for hit
+            bool erased = false;
+            for (auto it = m_markupStrokes.begin(); it != m_markupStrokes.end(); ++it) {
+                for (const auto& pt : it->points) {
+                    float dx = pt.x - normX;
+                    float dy = pt.y - normY;
+                    if (dx * dx + dy * dy < hitRadius * hitRadius) {
+                        m_markupStrokes.erase(it);
+                        UpdateRendererMarkup();
+                        erased = true;
+                        break;
+                    }
+                }
+                if (erased) break;
+            }
+
+            // Check text overlays for hit if no stroke was erased
+            if (!erased) {
+                for (auto it = m_textOverlays.begin(); it != m_textOverlays.end(); ++it) {
+                    float dx = it->x - normX;
+                    float dy = it->y - normY;
+                    // Text hit box is wider
+                    if (dx > -hitRadius && dx < 0.2f && dy > -hitRadius && dy < hitRadius * 2) {
+                        m_textOverlays.erase(it);
+                        UpdateRendererText();
+                        erased = true;
+                        break;
+                    }
+                }
+            }
+
+            if (erased) {
+                InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
+            }
         }
     } else {
         m_isPanning = true;
