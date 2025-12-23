@@ -40,6 +40,15 @@ public:
     };
     void SetMarkupStrokes(const std::vector<MarkupStroke>& strokes);
 
+    // Text overlays
+    struct TextOverlay {
+        std::wstring text;
+        float x, y;  // Normalized 0-1 coords
+        D2D1_COLOR_F color;
+        float fontSize;  // Normalized
+    };
+    void SetTextOverlays(const std::vector<TextOverlay>& overlays);
+
     // Get image rect in screen coordinates (for coordinate transforms)
     D2D1_RECT_F GetScreenImageRect();
 
@@ -83,6 +92,10 @@ private:
     // Markup strokes
     std::vector<MarkupStroke> m_markupStrokes;
     ComPtr<ID2D1SolidColorBrush> m_markupBrush;
+
+    // Text overlays
+    std::vector<TextOverlay> m_textOverlays;
+    ComPtr<IDWriteFactory> m_dwriteFactory;
 
     // Background color (dark)
     D2D1_COLOR_F m_backgroundColor = { 0.1f, 0.1f, 0.1f, 1.0f };

@@ -58,8 +58,9 @@ private:
     // Image saving helper
     bool SaveImageToFile(const std::wstring& filePath);
 
-    // Update renderer with current markup
+    // Update renderer with current markup/text
     void UpdateRendererMarkup();
+    void UpdateRendererText();
 
     // GIF animation
     void StartGifAnimation();

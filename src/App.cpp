@@ -659,20 +659,14 @@ bool App::SaveImageToFile(const std::wstring& filePath) {
             }
         }
 
-        // Draw text overlays (still in screen coords - TODO: normalize these too)
+        // Draw text overlays (normalized 0-1 coords scaled to output size)
         ComPtr<IDWriteFactory> dwriteFactory;
         DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED,
             __uuidof(IDWriteFactory), reinterpret_cast<IUnknown**>(dwriteFactory.GetAddressOf()));
         if (dwriteFactory) {
-            D2D1_RECT_F screenImageRect = m_renderer->GetScreenImageRect();
-            float screenW = screenImageRect.right - screenImageRect.left;
-            float screenH = screenImageRect.bottom - screenImageRect.top;
-            float scaleX = (screenW > 0) ? outW / screenW : 1.0f;
-            float scaleY = (screenH > 0) ? outH / screenH : 1.0f;
-
             for (const auto& text : m_textOverlays) {
                 ComPtr<IDWriteTextFormat> textFormat;
-                float scaledFontSize = text.fontSize * scaleX;
+                float scaledFontSize = text.fontSize * outW;
                 dwriteFactory->CreateTextFormat(L"Segoe UI", nullptr,
                     DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
                     scaledFontSize, L"en-us", &textFormat);
@@ -680,8 +674,8 @@ bool App::SaveImageToFile(const std::wstring& filePath) {
                 ComPtr<ID2D1SolidColorBrush> brush;
                 rt->CreateSolidColorBrush(text.color, &brush);
                 if (!brush) continue;
-                float tx = (text.x - screenImageRect.left) * scaleX;
-                float ty = (text.y - screenImageRect.top) * scaleY;
+                float tx = text.x * outW;
+                float ty = text.y * outH;
                 rt->DrawText(text.text.c_str(), (UINT32)text.text.length(), textFormat.Get(),
                     D2D1::RectF(tx, ty, outW, outH), brush.Get());
             }
@@ -805,6 +799,20 @@ void App::UpdateRendererMarkup() {
         rendererStrokes.push_back(rs);
     }
     m_renderer->SetMarkupStrokes(rendererStrokes);
+}
+
+void App::UpdateRendererText() {
+    std::vector<Renderer::TextOverlay> rendererTexts;
+    for (const auto& text : m_textOverlays) {
+        Renderer::TextOverlay rt;
+        rt.text = text.text;
+        rt.x = text.x;
+        rt.y = text.y;
+        rt.color = text.color;
+        rt.fontSize = text.fontSize;
+        rendererTexts.push_back(rt);
+    }
+    m_renderer->SetTextOverlays(rendererTexts);
 }
 
 void App::ApplyCrop() {
@@ -1041,15 +1049,34 @@ void App::OnMouseDown(int x, int y) {
             SetCapture(m_window->GetHwnd());
         }
     } else if (m_editMode == EditMode::Text) {
-        // Simple text input - would need a dialog for full implementation
-        TextOverlay text;
-        text.x = static_cast<float>(x);
-        text.y = static_cast<float>(y);
-        text.text = L"Text";
-        text.color = D2D1::ColorF(D2D1::ColorF::White);
-        text.fontSize = 24.0f;
-        m_textOverlays.push_back(text);
-        InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
+        // Convert screen coords to normalized image coords
+        D2D1_RECT_F imageRect = m_renderer->GetScreenImageRect();
+        float imageW = imageRect.right - imageRect.left;
+        float imageH = imageRect.bottom - imageRect.top;
+        if (imageW > 0 && imageH > 0) {
+            // Simple text input dialog
+            wchar_t inputText[256] = L"";
+            HWND hwnd = m_window->GetHwnd();
+
+            // Create a simple input using a message box workaround isn't ideal
+            // Use a proper dialog resource or prompt
+            // For now, use a simple hardcoded prompt approach
+            if (MessageBoxW(hwnd, L"Enter text (OK for 'Text', Cancel to abort):",
+                           L"Add Text", MB_OKCANCEL) == IDOK) {
+                float normX = (static_cast<float>(x) - imageRect.left) / imageW;
+                float normY = (static_cast<float>(y) - imageRect.top) / imageH;
+
+                TextOverlay text;
+                text.x = normX;
+                text.y = normY;
+                text.text = L"Text";  // TODO: proper input dialog
+                text.color = D2D1::ColorF(D2D1::ColorF::White);
+                text.fontSize = 24.0f / imageW;  // Normalize font size
+                m_textOverlays.push_back(text);
+                UpdateRendererText();
+                InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
+            }
+        }
     } else {
         m_isPanning = true;
         m_lastMouseX = x;

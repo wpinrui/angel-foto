@@ -40,6 +40,11 @@ bool Renderer::Initialize(HWND hwnd) {
     );
     if (FAILED(hr)) return false;
 
+    // Create DWrite factory for text rendering
+    hr = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED,
+        __uuidof(IDWriteFactory), reinterpret_cast<IUnknown**>(m_dwriteFactory.GetAddressOf()));
+    if (FAILED(hr)) return false;
+
     try {
         CreateDeviceResources();
     } catch (...) {
@@ -268,6 +273,10 @@ void Renderer::SetMarkupStrokes(const std::vector<MarkupStroke>& strokes) {
     m_markupStrokes = strokes;
 }
 
+void Renderer::SetTextOverlays(const std::vector<TextOverlay>& overlays) {
+    m_textOverlays = overlays;
+}
+
 D2D1_RECT_F Renderer::GetScreenImageRect() {
     return CalculateImageRect();
 }
@@ -395,6 +404,27 @@ void Renderer::Render() {
                     screenRect.top + stroke.points[i].y * screenH
                 };
                 m_deviceContext->DrawLine(p1, p2, brush.Get(), screenStrokeWidth);
+            }
+        }
+
+        // Draw text overlays (normalized 0-1 coords)
+        if (m_dwriteFactory) {
+            for (const auto& text : m_textOverlays) {
+                ComPtr<IDWriteTextFormat> textFormat;
+                float screenFontSize = text.fontSize * screenW;
+                m_dwriteFactory->CreateTextFormat(L"Segoe UI", nullptr,
+                    DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+                    screenFontSize, L"en-us", &textFormat);
+                if (!textFormat) continue;
+
+                ComPtr<ID2D1SolidColorBrush> brush;
+                m_deviceContext->CreateSolidColorBrush(text.color, &brush);
+                if (!brush) continue;
+
+                float screenX = screenRect.left + text.x * screenW;
+                float screenY = screenRect.top + text.y * screenH;
+                m_deviceContext->DrawText(text.text.c_str(), (UINT32)text.text.length(),
+                    textFormat.Get(), D2D1::RectF(screenX, screenY, screenX + 1000, screenY + 200), brush.Get());
             }
         }
 
