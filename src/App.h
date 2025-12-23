@@ -104,6 +104,10 @@ private:
     int m_cropEndX = 0;
     int m_cropEndY = 0;
 
+    // Applied crop (in original image coordinates, before rotation)
+    bool m_hasCrop = false;
+    WICRect m_appliedCrop = {};
+
     // Markup drawing
     struct MarkupStroke {
         std::vector<D2D1_POINT_2F> points;

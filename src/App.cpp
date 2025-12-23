@@ -84,9 +84,13 @@ void App::OpenFile(const std::wstring& filePath) {
 void App::LoadCurrentImage() {
     StopGifAnimation();
 
-    // Reset rotation when loading new image
+    // Reset all transformations when loading new image
     m_rotation = 0;
     m_renderer->SetRotation(0);
+    m_hasCrop = false;
+    m_appliedCrop = {};
+    m_markupStrokes.clear();
+    m_textOverlays.clear();
 
     std::wstring filePath = m_navigator->GetCurrentFilePath();
     if (filePath.empty()) {
@@ -456,6 +460,8 @@ void App::SaveImage() {
     // Reset transformations since they're now baked in
     m_rotation = 0;
     m_renderer->SetRotation(0);
+    m_hasCrop = false;
+    m_appliedCrop = {};
     m_markupStrokes.clear();
     m_textOverlays.clear();
 
@@ -579,6 +585,18 @@ bool App::SaveImageToFile(const std::wstring& filePath) {
         if (FAILED(hr)) return false;
 
         source = rotator;
+    }
+
+    // Apply crop if needed
+    if (m_hasCrop) {
+        ComPtr<IWICBitmapClipper> clipper;
+        hr = wicFactory->CreateBitmapClipper(&clipper);
+        if (FAILED(hr)) return false;
+
+        hr = clipper->Initialize(source.Get(), &m_appliedCrop);
+        if (FAILED(hr)) return false;
+
+        source = clipper;
     }
 
     // Get final dimensions
@@ -761,9 +779,13 @@ void App::ApplyCrop() {
 
     if (cropW <= 0 || cropH <= 0) return;
 
+    // Store crop for saving
+    m_hasCrop = true;
+    m_appliedCrop = { cropX, cropY, cropW, cropH };
+
     auto dc = m_renderer->GetDeviceContext();
 
-    // Create cropped bitmap
+    // Create cropped bitmap for display
     D2D1_BITMAP_PROPERTIES1 props = D2D1::BitmapProperties1(
         D2D1_BITMAP_OPTIONS_TARGET,
         D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED)
