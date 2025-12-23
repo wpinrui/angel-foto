@@ -624,14 +624,13 @@ bool App::SaveImageToFile(const std::wstring& filePath) {
     if (hasOverlays) {
         // Get screen-to-image transform from current view
         D2D1_RECT_F screenImageRect = m_renderer->GetScreenImageRect();
-        float origImageW = m_currentImage->bitmap ? m_currentImage->bitmap->GetSize().width : (float)width;
-        float origImageH = m_currentImage->bitmap ? m_currentImage->bitmap->GetSize().height : (float)height;
         float screenW = screenImageRect.right - screenImageRect.left;
         float screenH = screenImageRect.bottom - screenImageRect.top;
 
-        // Scale factor from screen to original image (before crop/rotation)
-        float scaleX = (screenW > 0) ? origImageW / screenW : 1.0f;
-        float scaleY = (screenH > 0) ? origImageH / screenH : 1.0f;
+        // Scale factor: screen coords to output image coords
+        // width/height are the final output image dimensions
+        float scaleX = (screenW > 0) ? (float)width / screenW : 1.0f;
+        float scaleY = (screenH > 0) ? (float)height / screenH : 1.0f;
         float offsetX = screenImageRect.left;
         float offsetY = screenImageRect.top;
 
