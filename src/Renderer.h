@@ -32,6 +32,14 @@ public:
     void SetCropRect(D2D1_RECT_F rect);
     D2D1_RECT_F GetCropRectInImageCoords() const;
 
+    // Markup strokes
+    struct MarkupStroke {
+        std::vector<D2D1_POINT_2F> points;
+        D2D1_COLOR_F color;
+        float width;
+    };
+    void SetMarkupStrokes(const std::vector<MarkupStroke>& strokes);
+
     // Get Direct2D factory (for creating bitmaps)
     ID2D1Factory1* GetFactory() const { return m_factory.Get(); }
     ID2D1DeviceContext* GetDeviceContext() const { return m_deviceContext.Get(); }
@@ -68,6 +76,10 @@ private:
     D2D1_RECT_F m_cropRect = { 0, 0, 0, 0 };
     ComPtr<ID2D1SolidColorBrush> m_cropBrush;
     ComPtr<ID2D1SolidColorBrush> m_cropDimBrush;
+
+    // Markup strokes
+    std::vector<MarkupStroke> m_markupStrokes;
+    ComPtr<ID2D1SolidColorBrush> m_markupBrush;
 
     // Background color (dark)
     D2D1_COLOR_F m_backgroundColor = { 0.1f, 0.1f, 0.1f, 1.0f };

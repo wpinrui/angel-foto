@@ -765,6 +765,18 @@ void App::CancelCurrentMode() {
     InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
 }
 
+void App::UpdateRendererMarkup() {
+    std::vector<Renderer::MarkupStroke> rendererStrokes;
+    for (const auto& stroke : m_markupStrokes) {
+        Renderer::MarkupStroke rs;
+        rs.points = stroke.points;
+        rs.color = stroke.color;
+        rs.width = stroke.width;
+        rendererStrokes.push_back(rs);
+    }
+    m_renderer->SetMarkupStrokes(rendererStrokes);
+}
+
 void App::ApplyCrop() {
     if (m_editMode != EditMode::Crop || !m_currentImage) return;
 
@@ -987,6 +999,7 @@ void App::OnMouseDown(int x, int y) {
         stroke.width = 3.0f;
         stroke.points.push_back(D2D1::Point2F(static_cast<float>(x), static_cast<float>(y)));
         m_markupStrokes.push_back(stroke);
+        UpdateRendererMarkup();
         SetCapture(m_window->GetHwnd());
     } else if (m_editMode == EditMode::Text) {
         // Simple text input - would need a dialog for full implementation
@@ -1034,6 +1047,7 @@ void App::OnMouseMove(int x, int y) {
     } else if (m_isDrawing && !m_markupStrokes.empty()) {
         m_markupStrokes.back().points.push_back(
             D2D1::Point2F(static_cast<float>(x), static_cast<float>(y)));
+        UpdateRendererMarkup();
         InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
     } else if (m_isPanning) {
         float dx = static_cast<float>(x - m_lastMouseX);

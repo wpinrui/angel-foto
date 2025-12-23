@@ -264,6 +264,10 @@ void Renderer::SetCropRect(D2D1_RECT_F rect) {
     m_cropRect = rect;
 }
 
+void Renderer::SetMarkupStrokes(const std::vector<MarkupStroke>& strokes) {
+    m_markupStrokes = strokes;
+}
+
 D2D1_RECT_F Renderer::GetCropRectInImageCoords() const {
     if (!m_currentImage) return { 0, 0, 0, 0 };
 
@@ -360,6 +364,19 @@ void Renderer::Render() {
 
         // Reset transform
         m_deviceContext->SetTransform(D2D1::Matrix3x2F::Identity());
+
+        // Draw markup strokes
+        for (const auto& stroke : m_markupStrokes) {
+            if (stroke.points.size() < 2) continue;
+
+            ComPtr<ID2D1SolidColorBrush> brush;
+            m_deviceContext->CreateSolidColorBrush(stroke.color, &brush);
+            if (!brush) continue;
+
+            for (size_t i = 1; i < stroke.points.size(); ++i) {
+                m_deviceContext->DrawLine(stroke.points[i - 1], stroke.points[i], brush.Get(), stroke.width);
+            }
+        }
 
         // Draw crop overlay if in crop mode
         if (m_cropMode && m_cropBrush && m_cropDimBrush) {
