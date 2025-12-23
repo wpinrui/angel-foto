@@ -432,7 +432,28 @@ void App::OpenFolderDialog() {
 
 void App::SaveImage() {
     if (!m_currentImage || m_currentImage->filePath.empty()) return;
-    SaveImageToFile(m_currentImage->filePath);
+
+    // Save to temp file first, then replace original (can't read and write same file)
+    fs::path origPath(m_currentImage->filePath);
+    fs::path tempPath = origPath.parent_path() / (L"~temp_" + origPath.filename().wstring());
+
+    if (SaveImageToFile(tempPath.wstring())) {
+        try {
+            // Release current image so file isn't locked
+            m_currentImage->bitmap.Reset();
+            fs::remove(origPath);
+            fs::rename(tempPath, origPath);
+            // Reset rotation and overlays since they're now baked in
+            m_rotation = 0;
+            m_renderer->SetRotation(0);
+            m_markupStrokes.clear();
+            m_textOverlays.clear();
+            // Reload the image
+            LoadCurrentImage();
+        } catch (...) {
+            fs::remove(tempPath);
+        }
+    }
 }
 
 void App::SaveImageAs() {
