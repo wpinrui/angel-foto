@@ -515,6 +515,8 @@ bool App::SaveImageToFile(const std::wstring& filePath) {
     auto d2dFactory = m_renderer->GetFactory();
     if (!wicFactory || !d2dFactory) return false;
 
+    bool hasOverlays = !m_markupStrokes.empty() || !m_textOverlays.empty();
+
     // Load original image with WIC
     ComPtr<IWICBitmapDecoder> decoder;
     HRESULT hr = wicFactory->CreateDecoderFromFilename(
@@ -526,16 +528,20 @@ bool App::SaveImageToFile(const std::wstring& filePath) {
     hr = decoder->GetFrame(0, &frameDecode);
     if (FAILED(hr)) return false;
 
-    // Convert to 32bppBGRA for processing
+    ComPtr<IWICBitmapSource> source = frameDecode;
+
+    // Only convert to BGRA if we need to draw overlays
     ComPtr<IWICFormatConverter> converter;
-    hr = wicFactory->CreateFormatConverter(&converter);
-    if (FAILED(hr)) return false;
+    if (hasOverlays) {
+        hr = wicFactory->CreateFormatConverter(&converter);
+        if (FAILED(hr)) return false;
 
-    hr = converter->Initialize(frameDecode.Get(), GUID_WICPixelFormat32bppBGRA,
-        WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom);
-    if (FAILED(hr)) return false;
+        hr = converter->Initialize(frameDecode.Get(), GUID_WICPixelFormat32bppBGRA,
+            WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom);
+        if (FAILED(hr)) return false;
 
-    ComPtr<IWICBitmapSource> source = converter;
+        source = converter;
+    }
 
     // Apply rotation if needed
     if (m_rotation != 0) {
@@ -558,8 +564,6 @@ bool App::SaveImageToFile(const std::wstring& filePath) {
     UINT width, height;
     source->GetSize(&width, &height);
 
-    // If we have markup or text, we need to render them onto the image
-    bool hasOverlays = !m_markupStrokes.empty() || !m_textOverlays.empty();
     ComPtr<IWICBitmap> wicBitmap;
 
     if (hasOverlays) {
@@ -688,11 +692,11 @@ bool App::SaveImageToFile(const std::wstring& filePath) {
     hr = frame->SetSize(width, height);
     if (FAILED(hr)) return false;
 
-    // Use appropriate pixel format
-    WICPixelFormatGUID pixelFormat = (containerFormat == GUID_ContainerFormatJpeg)
-        ? GUID_WICPixelFormat24bppBGR : GUID_WICPixelFormat32bppBGRA;
-    hr = frame->SetPixelFormat(&pixelFormat);
-    if (FAILED(hr)) return false;
+    // Get source pixel format and let encoder use compatible format
+    WICPixelFormatGUID srcPixelFormat;
+    source->GetPixelFormat(&srcPixelFormat);
+    hr = frame->SetPixelFormat(&srcPixelFormat);
+    // Ignore error - encoder will pick best compatible format
 
     hr = frame->WriteSource(source.Get(), nullptr);
     if (FAILED(hr)) return false;
