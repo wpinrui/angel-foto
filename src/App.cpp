@@ -665,18 +665,32 @@ bool App::SaveImageToFile(const std::wstring& filePath) {
     hr = encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache);
     if (FAILED(hr)) return false;
 
-    // Create frame
+    // Create frame with encoder options
     ComPtr<IWICBitmapFrameEncode> frame;
-    hr = encoder->CreateNewFrame(&frame, nullptr);
+    ComPtr<IPropertyBag2> props;
+    hr = encoder->CreateNewFrame(&frame, &props);
     if (FAILED(hr)) return false;
 
-    hr = frame->Initialize(nullptr);
+    // Set JPEG quality
+    if (containerFormat == GUID_ContainerFormatJpeg && props) {
+        PROPBAG2 option = {};
+        option.pstrName = const_cast<LPOLESTR>(L"ImageQuality");
+        VARIANT value;
+        VariantInit(&value);
+        value.vt = VT_R4;
+        value.fltVal = 0.9f; // 90% quality
+        props->Write(1, &option, &value);
+    }
+
+    hr = frame->Initialize(props.Get());
     if (FAILED(hr)) return false;
 
     hr = frame->SetSize(width, height);
     if (FAILED(hr)) return false;
 
-    WICPixelFormatGUID pixelFormat = GUID_WICPixelFormat32bppBGRA;
+    // Use appropriate pixel format
+    WICPixelFormatGUID pixelFormat = (containerFormat == GUID_ContainerFormatJpeg)
+        ? GUID_WICPixelFormat24bppBGR : GUID_WICPixelFormat32bppBGRA;
     hr = frame->SetPixelFormat(&pixelFormat);
     if (FAILED(hr)) return false;
 
