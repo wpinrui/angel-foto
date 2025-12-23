@@ -268,6 +268,10 @@ void Renderer::SetMarkupStrokes(const std::vector<MarkupStroke>& strokes) {
     m_markupStrokes = strokes;
 }
 
+D2D1_RECT_F Renderer::GetScreenImageRect() {
+    return CalculateImageRect();
+}
+
 D2D1_RECT_F Renderer::GetCropRectInImageCoords() const {
     if (!m_currentImage) return { 0, 0, 0, 0 };
 

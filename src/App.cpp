@@ -534,19 +534,21 @@ bool App::SaveImageToFile(const std::wstring& filePath) {
     std::transform(ext.begin(), ext.end(), ext.begin(), ::towlower);
 
     GUID containerFormat;
-    WICPixelFormatGUID targetPixelFormat;
     if (ext == L".jpg" || ext == L".jpeg") {
         containerFormat = GUID_ContainerFormatJpeg;
-        targetPixelFormat = GUID_WICPixelFormat24bppBGR;
     } else if (ext == L".bmp") {
         containerFormat = GUID_ContainerFormatBmp;
-        targetPixelFormat = GUID_WICPixelFormat24bppBGR;
     } else {
         containerFormat = GUID_ContainerFormatPng;
-        targetPixelFormat = GUID_WICPixelFormat32bppBGRA;
     }
 
     bool hasOverlays = !m_markupStrokes.empty() || !m_textOverlays.empty();
+
+    // Use 32bppBGRA for D2D rendering when we have overlays
+    WICPixelFormatGUID targetPixelFormat = hasOverlays ?
+        GUID_WICPixelFormat32bppBGRA :
+        ((containerFormat == GUID_ContainerFormatJpeg || containerFormat == GUID_ContainerFormatBmp) ?
+            GUID_WICPixelFormat24bppBGR : GUID_WICPixelFormat32bppBGRA);
 
     // Load original image with WIC
     ComPtr<IWICBitmapDecoder> decoder;
@@ -618,8 +620,21 @@ bool App::SaveImageToFile(const std::wstring& filePath) {
         stride, (UINT)buffer.size(), buffer.data(), &wicBitmap);
     if (FAILED(hr)) return false;
 
-    // Draw overlays if needed
-    if (hasOverlays && targetPixelFormat == GUID_WICPixelFormat32bppBGRA) {
+    // Draw overlays if needed (convert screen coords to image coords)
+    if (hasOverlays) {
+        // Get screen-to-image transform from current view
+        D2D1_RECT_F screenImageRect = m_renderer->GetScreenImageRect();
+        float origImageW = m_currentImage->bitmap ? m_currentImage->bitmap->GetSize().width : (float)width;
+        float origImageH = m_currentImage->bitmap ? m_currentImage->bitmap->GetSize().height : (float)height;
+        float screenW = screenImageRect.right - screenImageRect.left;
+        float screenH = screenImageRect.bottom - screenImageRect.top;
+
+        // Scale factor from screen to original image (before crop/rotation)
+        float scaleX = (screenW > 0) ? origImageW / screenW : 1.0f;
+        float scaleY = (screenH > 0) ? origImageH / screenH : 1.0f;
+        float offsetX = screenImageRect.left;
+        float offsetY = screenImageRect.top;
+
         ComPtr<ID2D1RenderTarget> rt;
         D2D1_RENDER_TARGET_PROPERTIES rtProps = D2D1::RenderTargetProperties(
             D2D1_RENDER_TARGET_TYPE_DEFAULT,
@@ -635,7 +650,16 @@ bool App::SaveImageToFile(const std::wstring& filePath) {
                 rt->CreateSolidColorBrush(stroke.color, &brush);
                 if (!brush) continue;
                 for (size_t i = 1; i < stroke.points.size(); ++i) {
-                    rt->DrawLine(stroke.points[i - 1], stroke.points[i], brush.Get(), stroke.width);
+                    // Transform from screen to image coordinates
+                    D2D1_POINT_2F p1 = {
+                        (stroke.points[i - 1].x - offsetX) * scaleX,
+                        (stroke.points[i - 1].y - offsetY) * scaleY
+                    };
+                    D2D1_POINT_2F p2 = {
+                        (stroke.points[i].x - offsetX) * scaleX,
+                        (stroke.points[i].y - offsetY) * scaleY
+                    };
+                    rt->DrawLine(p1, p2, brush.Get(), stroke.width * scaleX);
                 }
             }
 
@@ -645,15 +669,18 @@ bool App::SaveImageToFile(const std::wstring& filePath) {
             if (dwriteFactory) {
                 for (const auto& text : m_textOverlays) {
                     ComPtr<IDWriteTextFormat> textFormat;
+                    float scaledFontSize = text.fontSize * scaleX;
                     dwriteFactory->CreateTextFormat(L"Segoe UI", nullptr,
                         DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
-                        text.fontSize, L"en-us", &textFormat);
+                        scaledFontSize, L"en-us", &textFormat);
                     if (!textFormat) continue;
                     ComPtr<ID2D1SolidColorBrush> brush;
                     rt->CreateSolidColorBrush(text.color, &brush);
                     if (!brush) continue;
+                    float tx = (text.x - offsetX) * scaleX;
+                    float ty = (text.y - offsetY) * scaleY;
                     rt->DrawText(text.text.c_str(), (UINT32)text.text.length(), textFormat.Get(),
-                        D2D1::RectF(text.x, text.y, (float)width, (float)height), brush.Get());
+                        D2D1::RectF(tx, ty, (float)width, (float)height), brush.Get());
                 }
             }
 

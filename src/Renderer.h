@@ -40,6 +40,9 @@ public:
     };
     void SetMarkupStrokes(const std::vector<MarkupStroke>& strokes);
 
+    // Get image rect in screen coordinates (for coordinate transforms)
+    D2D1_RECT_F GetScreenImageRect();
+
     // Get Direct2D factory (for creating bitmaps)
     ID2D1Factory1* GetFactory() const { return m_factory.Get(); }
     ID2D1DeviceContext* GetDeviceContext() const { return m_deviceContext.Get(); }
