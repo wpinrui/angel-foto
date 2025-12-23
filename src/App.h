@@ -65,6 +65,11 @@ private:
     void UpdateRendererText();
     void EraseAtPoint(int x, int y);
 
+    // Undo support
+    void PushUndoState();
+    void Undo();
+    bool HasPendingEdits() const;
+
     // GIF animation
     void StartGifAnimation();
     void StopGifAnimation();
@@ -139,4 +144,14 @@ private:
     std::wstring m_editingText;
     float m_editingTextX = 0;
     float m_editingTextY = 0;
+
+    // Undo stack
+    struct EditState {
+        std::vector<MarkupStroke> strokes;
+        std::vector<TextOverlay> texts;
+        bool hasCrop;
+        WICRect appliedCrop;
+    };
+    std::vector<EditState> m_undoStack;
+    static const size_t MAX_UNDO_LEVELS = 50;
 };

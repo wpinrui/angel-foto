@@ -91,6 +91,7 @@ void App::LoadCurrentImage() {
     m_appliedCrop = {};
     m_markupStrokes.clear();
     m_textOverlays.clear();
+    m_undoStack.clear();
 
     std::wstring filePath = m_navigator->GetCurrentFilePath();
     if (filePath.empty()) {
@@ -286,21 +287,158 @@ void CALLBACK App::GifTimerProc(HWND hwnd, UINT msg, UINT_PTR id, DWORD time) {
 void App::CopyToClipboard() {
     if (!m_currentImage || !m_currentImage->bitmap) return;
 
-    auto size = m_currentImage->bitmap->GetSize();
-    int width = static_cast<int>(size.width);
-    int height = static_cast<int>(size.height);
+    auto wicFactory = m_renderer->GetWICFactory();
+    auto d2dFactory = m_renderer->GetFactory();
+    if (!wicFactory || !d2dFactory) return;
 
-    // Create a DIB for the clipboard
+    bool hasOverlays = !m_markupStrokes.empty() || !m_textOverlays.empty();
+
+    // Load original image with WIC
+    ComPtr<IWICBitmapDecoder> decoder;
+    HRESULT hr = wicFactory->CreateDecoderFromFilename(
+        m_currentImage->filePath.c_str(), nullptr, GENERIC_READ,
+        WICDecodeMetadataCacheOnDemand, &decoder);
+    if (FAILED(hr)) return;
+
+    ComPtr<IWICBitmapFrameDecode> frameDecode;
+    hr = decoder->GetFrame(0, &frameDecode);
+    if (FAILED(hr)) return;
+
+    // Convert to 32bpp BGRA for clipboard
+    ComPtr<IWICFormatConverter> converter;
+    hr = wicFactory->CreateFormatConverter(&converter);
+    if (FAILED(hr)) return;
+
+    hr = converter->Initialize(frameDecode.Get(), GUID_WICPixelFormat32bppBGRA,
+        WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom);
+    if (FAILED(hr)) return;
+
+    ComPtr<IWICBitmapSource> source = converter;
+
+    // Apply rotation if needed
+    if (m_rotation != 0) {
+        ComPtr<IWICBitmapFlipRotator> rotator;
+        hr = wicFactory->CreateBitmapFlipRotator(&rotator);
+        if (FAILED(hr)) return;
+
+        WICBitmapTransformOptions transform = WICBitmapTransformRotate0;
+        if (m_rotation == 90) transform = WICBitmapTransformRotate90;
+        else if (m_rotation == 180) transform = WICBitmapTransformRotate180;
+        else if (m_rotation == 270) transform = WICBitmapTransformRotate270;
+
+        hr = rotator->Initialize(source.Get(), transform);
+        if (FAILED(hr)) return;
+
+        source = rotator;
+    }
+
+    // Apply crop if needed
+    if (m_hasCrop) {
+        ComPtr<IWICBitmapClipper> clipper;
+        hr = wicFactory->CreateBitmapClipper(&clipper);
+        if (FAILED(hr)) return;
+
+        hr = clipper->Initialize(source.Get(), &m_appliedCrop);
+        if (FAILED(hr)) return;
+
+        source = clipper;
+    }
+
+    // Get final dimensions
+    UINT width, height;
+    source->GetSize(&width, &height);
+
+    // Copy to buffer
+    UINT stride = width * 4;
+    std::vector<BYTE> buffer(stride * height);
+    WICRect rcCopy = { 0, 0, (INT)width, (INT)height };
+    hr = source->CopyPixels(&rcCopy, stride, (UINT)buffer.size(), buffer.data());
+    if (FAILED(hr)) return;
+
+    // Draw overlays if needed
+    if (hasOverlays) {
+        ComPtr<IWICBitmap> wicBitmap;
+        hr = wicFactory->CreateBitmapFromMemory(width, height, GUID_WICPixelFormat32bppPBGRA,
+            stride, (UINT)buffer.size(), buffer.data(), &wicBitmap);
+        if (FAILED(hr)) return;
+
+        ComPtr<ID2D1RenderTarget> rt;
+        D2D1_RENDER_TARGET_PROPERTIES rtProps = D2D1::RenderTargetProperties(
+            D2D1_RENDER_TARGET_TYPE_DEFAULT,
+            D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED)
+        );
+        hr = d2dFactory->CreateWicBitmapRenderTarget(wicBitmap.Get(), rtProps, &rt);
+        if (FAILED(hr)) return;
+
+        rt->BeginDraw();
+
+        // Draw markup strokes
+        float outW = static_cast<float>(width);
+        float outH = static_cast<float>(height);
+
+        for (const auto& stroke : m_markupStrokes) {
+            if (stroke.points.size() < 2) continue;
+            ComPtr<ID2D1SolidColorBrush> brush;
+            rt->CreateSolidColorBrush(stroke.color, &brush);
+            if (!brush) continue;
+
+            float strokeWidth = stroke.width * outW;
+            for (size_t i = 1; i < stroke.points.size(); ++i) {
+                D2D1_POINT_2F p1 = { stroke.points[i-1].x * outW, stroke.points[i-1].y * outH };
+                D2D1_POINT_2F p2 = { stroke.points[i].x * outW, stroke.points[i].y * outH };
+                rt->DrawLine(p1, p2, brush.Get(), strokeWidth);
+            }
+        }
+
+        // Draw text overlays
+        ComPtr<IDWriteFactory> dwriteFactory;
+        DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory),
+            reinterpret_cast<IUnknown**>(dwriteFactory.GetAddressOf()));
+
+        if (dwriteFactory) {
+            for (const auto& text : m_textOverlays) {
+                ComPtr<IDWriteTextFormat> textFormat;
+                float fontSize = text.fontSize * outW;
+                dwriteFactory->CreateTextFormat(L"Segoe UI", nullptr,
+                    DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+                    fontSize, L"en-us", &textFormat);
+                if (!textFormat) continue;
+
+                ComPtr<ID2D1SolidColorBrush> brush;
+                rt->CreateSolidColorBrush(text.color, &brush);
+                if (!brush) continue;
+
+                float x = text.x * outW;
+                float y = text.y * outH;
+                rt->DrawText(text.text.c_str(), (UINT32)text.text.length(),
+                    textFormat.Get(), D2D1::RectF(x, y, x + 1000, y + 200), brush.Get());
+            }
+        }
+
+        rt->EndDraw();
+
+        // Copy back from WIC bitmap
+        ComPtr<IWICBitmapLock> lock;
+        WICRect lockRect = { 0, 0, (INT)width, (INT)height };
+        hr = wicBitmap->Lock(&lockRect, WICBitmapLockRead, &lock);
+        if (SUCCEEDED(hr)) {
+            UINT bufSize;
+            BYTE* pData;
+            lock->GetDataPointer(&bufSize, &pData);
+            memcpy(buffer.data(), pData, buffer.size());
+        }
+    }
+
+    // Create DIB for clipboard
     BITMAPINFOHEADER bi = {};
     bi.biSize = sizeof(BITMAPINFOHEADER);
     bi.biWidth = width;
-    bi.biHeight = -height; // Top-down
+    bi.biHeight = -(int)height; // Top-down
     bi.biPlanes = 1;
     bi.biBitCount = 32;
     bi.biCompression = BI_RGB;
 
-    size_t imageSize = width * height * 4;
-    HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, sizeof(BITMAPINFOHEADER) + imageSize);
+    HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, sizeof(BITMAPINFOHEADER) + buffer.size());
     if (!hMem) return;
 
     void* pMem = GlobalLock(hMem);
@@ -309,44 +447,8 @@ void App::CopyToClipboard() {
         return;
     }
 
-    // Copy header
     memcpy(pMem, &bi, sizeof(BITMAPINFOHEADER));
-
-    // Copy pixel data from D2D bitmap
-    D2D1_MAPPED_RECT mapped;
-    ComPtr<ID2D1Bitmap1> bitmap1;
-
-    // Create a CPU-readable bitmap
-    D2D1_BITMAP_PROPERTIES1 props = D2D1::BitmapProperties1(
-        D2D1_BITMAP_OPTIONS_CPU_READ | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
-        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED)
-    );
-
-    auto dc = m_renderer->GetDeviceContext();
-    HRESULT hr = dc->CreateBitmap(
-        D2D1::SizeU(width, height),
-        nullptr, 0, props, &bitmap1
-    );
-
-    if (SUCCEEDED(hr)) {
-        D2D1_POINT_2U destPoint = {0, 0};
-        D2D1_RECT_U srcRect = {0, 0, (UINT32)width, (UINT32)height};
-        hr = bitmap1->CopyFromBitmap(&destPoint, m_currentImage->bitmap.Get(), &srcRect);
-
-        if (SUCCEEDED(hr)) {
-            hr = bitmap1->Map(D2D1_MAP_OPTIONS_READ, &mapped);
-            if (SUCCEEDED(hr)) {
-                BYTE* dest = static_cast<BYTE*>(pMem) + sizeof(BITMAPINFOHEADER);
-                for (int y = 0; y < height; y++) {
-                    memcpy(dest + y * width * 4,
-                           mapped.bits + y * mapped.pitch,
-                           width * 4);
-                }
-                bitmap1->Unmap();
-            }
-        }
-    }
-
+    memcpy(static_cast<BYTE*>(pMem) + sizeof(BITMAPINFOHEADER), buffer.data(), buffer.size());
     GlobalUnlock(hMem);
 
     if (OpenClipboard(m_window->GetHwnd())) {
@@ -441,39 +543,84 @@ void App::SaveImage() {
     if (!m_currentImage || m_currentImage->filePath.empty()) return;
 
     fs::path origPath(m_currentImage->filePath);
-    fs::path tempPath = origPath.parent_path() / (L"~temp_" + origPath.filename().wstring());
     std::wstring savedFilePath = m_currentImage->filePath;
+    bool saveCopy = false;
 
-    // Save to temp file
-    if (!SaveImageToFile(tempPath.wstring())) return;
+    // If there are edits (markups, text, crop), ask user what to do
+    if (HasPendingEdits()) {
+        int result = MessageBox(m_window->GetHwnd(),
+            L"The image has markups or crop applied.\n\n"
+            L"Choose how to save:\n"
+            L"  Yes = Save a copy (original preserved)\n"
+            L"  No = Overwrite original\n"
+            L"  Cancel = Don't save",
+            L"Save Image",
+            MB_YESNOCANCEL | MB_ICONQUESTION);
 
-    // Release current image so original file isn't locked
-    m_currentImage->bitmap.Reset();
-    m_currentImage = nullptr;
-    m_renderer->ClearImage();
-
-    // Replace original with temp
-    try {
-        fs::remove(origPath);
-        fs::rename(tempPath, origPath);
-    } catch (...) {
-        try { fs::remove(tempPath); } catch (...) {}
+        if (result == IDCANCEL) return;
+        saveCopy = (result == IDYES);
     }
 
-    // Reset transformations since they're now baked in
-    m_rotation = 0;
-    m_renderer->SetRotation(0);
-    m_hasCrop = false;
-    m_appliedCrop = {};
-    m_markupStrokes.clear();
-    m_textOverlays.clear();
+    if (saveCopy) {
+        // Generate copy filename: image.jpg -> image_edited.jpg
+        fs::path copyPath = origPath.parent_path() /
+            (origPath.stem().wstring() + L"_edited" + origPath.extension().wstring());
 
-    // Reload the image
-    m_navigator->SetCurrentFile(savedFilePath);
-    LoadCurrentImage();
+        // If file exists, add number: image_edited_2.jpg
+        int counter = 2;
+        while (fs::exists(copyPath)) {
+            copyPath = origPath.parent_path() /
+                (origPath.stem().wstring() + L"_edited_" + std::to_wstring(counter++) + origPath.extension().wstring());
+        }
 
-    // Flash title to indicate save
-    FlashWindow(m_window->GetHwnd(), TRUE);
+        if (!SaveImageToFile(copyPath.wstring())) return;
+
+        // Clear edits since they're now saved
+        m_markupStrokes.clear();
+        m_textOverlays.clear();
+        m_hasCrop = false;
+        m_appliedCrop = {};
+        m_undoStack.clear();
+        UpdateRendererMarkup();
+        UpdateRendererText();
+        InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
+
+        FlashWindow(m_window->GetHwnd(), TRUE);
+    } else {
+        // Overwrite original
+        fs::path tempPath = origPath.parent_path() / (L"~temp_" + origPath.filename().wstring());
+
+        // Save to temp file
+        if (!SaveImageToFile(tempPath.wstring())) return;
+
+        // Release current image so original file isn't locked
+        m_currentImage->bitmap.Reset();
+        m_currentImage = nullptr;
+        m_renderer->ClearImage();
+
+        // Replace original with temp
+        try {
+            fs::remove(origPath);
+            fs::rename(tempPath, origPath);
+        } catch (...) {
+            try { fs::remove(tempPath); } catch (...) {}
+        }
+
+        // Reset transformations since they're now baked in
+        m_rotation = 0;
+        m_renderer->SetRotation(0);
+        m_hasCrop = false;
+        m_appliedCrop = {};
+        m_markupStrokes.clear();
+        m_textOverlays.clear();
+        m_undoStack.clear();
+
+        // Reload the image
+        m_navigator->SetCurrentFile(savedFilePath);
+        LoadCurrentImage();
+
+        FlashWindow(m_window->GetHwnd(), TRUE);
+    }
 }
 
 void App::SaveImageAs() {
@@ -740,15 +887,101 @@ bool App::SaveImageToFile(const std::wstring& filePath) {
 }
 
 void App::RotateCW() {
+    if (!m_currentImage || m_currentImage->filePath.empty()) return;
+
     m_rotation = (m_rotation + 90) % 360;
     m_renderer->SetRotation(m_rotation);
     InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
+
+    // Auto-save rotation (rotation is reversible by rotating back)
+    fs::path origPath(m_currentImage->filePath);
+    fs::path tempPath = origPath.parent_path() / (L"~temp_" + origPath.filename().wstring());
+    std::wstring savedFilePath = m_currentImage->filePath;
+
+    // Save current state (without markups for rotation-only save)
+    auto savedStrokes = m_markupStrokes;
+    auto savedTexts = m_textOverlays;
+    bool savedHasCrop = m_hasCrop;
+    auto savedCrop = m_appliedCrop;
+    m_markupStrokes.clear();
+    m_textOverlays.clear();
+    m_hasCrop = false;
+    m_appliedCrop = {};
+
+    if (SaveImageToFile(tempPath.wstring())) {
+        m_currentImage->bitmap.Reset();
+        m_currentImage = nullptr;
+        m_renderer->ClearImage();
+
+        try {
+            fs::remove(origPath);
+            fs::rename(tempPath, origPath);
+        } catch (...) {
+            try { fs::remove(tempPath); } catch (...) {}
+        }
+
+        m_rotation = 0;
+        m_renderer->SetRotation(0);
+        m_navigator->SetCurrentFile(savedFilePath);
+        LoadCurrentImage();
+    }
+
+    // Restore markups/crop state
+    m_markupStrokes = savedStrokes;
+    m_textOverlays = savedTexts;
+    m_hasCrop = savedHasCrop;
+    m_appliedCrop = savedCrop;
+    UpdateRendererMarkup();
+    UpdateRendererText();
 }
 
 void App::RotateCCW() {
+    if (!m_currentImage || m_currentImage->filePath.empty()) return;
+
     m_rotation = (m_rotation + 270) % 360;
     m_renderer->SetRotation(m_rotation);
     InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
+
+    // Auto-save rotation (rotation is reversible by rotating back)
+    fs::path origPath(m_currentImage->filePath);
+    fs::path tempPath = origPath.parent_path() / (L"~temp_" + origPath.filename().wstring());
+    std::wstring savedFilePath = m_currentImage->filePath;
+
+    // Save current state (without markups for rotation-only save)
+    auto savedStrokes = m_markupStrokes;
+    auto savedTexts = m_textOverlays;
+    bool savedHasCrop = m_hasCrop;
+    auto savedCrop = m_appliedCrop;
+    m_markupStrokes.clear();
+    m_textOverlays.clear();
+    m_hasCrop = false;
+    m_appliedCrop = {};
+
+    if (SaveImageToFile(tempPath.wstring())) {
+        m_currentImage->bitmap.Reset();
+        m_currentImage = nullptr;
+        m_renderer->ClearImage();
+
+        try {
+            fs::remove(origPath);
+            fs::rename(tempPath, origPath);
+        } catch (...) {
+            try { fs::remove(tempPath); } catch (...) {}
+        }
+
+        m_rotation = 0;
+        m_renderer->SetRotation(0);
+        m_navigator->SetCurrentFile(savedFilePath);
+        LoadCurrentImage();
+    }
+
+    // Restore markups/crop state
+    m_markupStrokes = savedStrokes;
+    m_textOverlays = savedTexts;
+    m_hasCrop = savedHasCrop;
+    m_appliedCrop = savedCrop;
+    UpdateRendererMarkup();
+    UpdateRendererText();
 }
 
 void App::ToggleCropMode() {
@@ -895,6 +1128,40 @@ void App::EraseAtPoint(int x, int y) {
     }
 }
 
+void App::PushUndoState() {
+    EditState state;
+    state.strokes = m_markupStrokes;
+    state.texts = m_textOverlays;
+    state.hasCrop = m_hasCrop;
+    state.appliedCrop = m_appliedCrop;
+    m_undoStack.push_back(state);
+
+    // Limit undo stack size
+    if (m_undoStack.size() > MAX_UNDO_LEVELS) {
+        m_undoStack.erase(m_undoStack.begin());
+    }
+}
+
+void App::Undo() {
+    if (m_undoStack.empty()) return;
+
+    EditState state = m_undoStack.back();
+    m_undoStack.pop_back();
+
+    m_markupStrokes = state.strokes;
+    m_textOverlays = state.texts;
+    m_hasCrop = state.hasCrop;
+    m_appliedCrop = state.appliedCrop;
+
+    UpdateRendererMarkup();
+    UpdateRendererText();
+    InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
+}
+
+bool App::HasPendingEdits() const {
+    return !m_markupStrokes.empty() || !m_textOverlays.empty() || m_hasCrop;
+}
+
 void App::ApplyCrop() {
     if (m_editMode != EditMode::Crop || !m_currentImage) return;
 
@@ -1013,6 +1280,7 @@ void App::OnKeyDown(UINT key) {
         if (m_isEditingText) {
             // Commit the text
             if (!m_editingText.empty()) {
+                PushUndoState();
                 D2D1_RECT_F imageRect = m_renderer->GetScreenImageRect();
                 float imageW = imageRect.right - imageRect.left;
 
@@ -1029,6 +1297,7 @@ void App::OnKeyDown(UINT key) {
             UpdateRendererText();
             InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
         } else if (m_editMode == EditMode::Crop) {
+            PushUndoState();
             ApplyCrop();
         }
         break;
@@ -1111,6 +1380,10 @@ void App::OnKeyDown(UINT key) {
         ToggleEraseMode();
         break;
 
+    case 'Z':
+        if (ctrl) Undo();
+        break;
+
     case 'Q':
         if (ctrl) PostQuitMessage(0);
         break;
@@ -1173,6 +1446,7 @@ void App::OnMouseDown(int x, int y) {
             float normX = (static_cast<float>(x) - imageRect.left) / imageW;
             float normY = (static_cast<float>(y) - imageRect.top) / imageH;
 
+            PushUndoState();
             m_isDrawing = true;
             MarkupStroke stroke;
             stroke.color = D2D1::ColorF(D2D1::ColorF::Red);
@@ -1198,6 +1472,7 @@ void App::OnMouseDown(int x, int y) {
         }
     } else if (m_editMode == EditMode::Erase) {
         // Start erasing - will continue to erase as mouse drags
+        PushUndoState();
         m_isErasing = true;
         SetCapture(m_window->GetHwnd());
         // Erase at initial click position
