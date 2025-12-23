@@ -580,7 +580,7 @@ bool App::SaveImageToFile(const std::wstring& filePath) {
 
     // Always materialize to a WIC bitmap to avoid streaming issues
     UINT bpp = (targetPixelFormat == GUID_WICPixelFormat32bppBGRA) ? 4 : 3;
-    UINT stride = width * bpp;
+    UINT stride = ((width * bpp) + 3) & ~3;  // DWORD-aligned stride
     std::vector<BYTE> buffer(stride * height);
 
     WICRect rcCopy = { 0, 0, (INT)width, (INT)height };
