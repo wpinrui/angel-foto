@@ -431,47 +431,40 @@ void App::OpenFolderDialog() {
 }
 
 void App::SaveImage() {
-    if (!m_currentImage || m_currentImage->filePath.empty()) {
-        MessageBoxW(m_window->GetHwnd(), L"No image loaded", L"Save Error", MB_OK);
-        return;
-    }
+    if (!m_currentImage || m_currentImage->filePath.empty()) return;
 
     fs::path origPath(m_currentImage->filePath);
     fs::path tempPath = origPath.parent_path() / (L"~temp_" + origPath.filename().wstring());
     std::wstring savedFilePath = m_currentImage->filePath;
 
     // Save to temp file
-    bool saved = SaveImageToFile(tempPath.wstring());
+    if (!SaveImageToFile(tempPath.wstring())) return;
 
-    if (!saved) {
-        MessageBoxW(m_window->GetHwnd(), L"SaveImageToFile failed", L"Save Error", MB_OK);
-        return;
+    // Release current image so original file isn't locked
+    m_currentImage->bitmap.Reset();
+    m_currentImage = nullptr;
+    m_renderer->ClearImage();
+
+    // Replace original with temp
+    try {
+        fs::remove(origPath);
+        fs::rename(tempPath, origPath);
+    } catch (...) {
+        try { fs::remove(tempPath); } catch (...) {}
     }
 
-    {
-        // Release current image so original file isn't locked
-        m_currentImage->bitmap.Reset();
-        m_currentImage = nullptr;
-        m_renderer->ClearImage();
+    // Reset transformations since they're now baked in
+    m_rotation = 0;
+    m_renderer->SetRotation(0);
+    m_markupStrokes.clear();
+    m_textOverlays.clear();
 
-        // Replace original with temp
-        try {
-            fs::remove(origPath);
-            fs::rename(tempPath, origPath);
-        } catch (...) {
-            try { fs::remove(tempPath); } catch (...) {}
-        }
+    // Reload the image
+    m_navigator->SetCurrentFile(savedFilePath);
+    LoadCurrentImage();
 
-        // Reset transformations since they're now baked in
-        m_rotation = 0;
-        m_renderer->SetRotation(0);
-        m_markupStrokes.clear();
-        m_textOverlays.clear();
-
-        // Reload the image
-        m_navigator->SetCurrentFile(savedFilePath);
-        LoadCurrentImage();
-    }
+    // Flash title to indicate save
+    FlashWindow(m_window->GetHwnd(), TRUE);
 }
 
 void App::SaveImageAs() {
