@@ -812,6 +812,21 @@ void App::UpdateRendererText() {
         rt.fontSize = text.fontSize;
         rendererTexts.push_back(rt);
     }
+
+    // Add editing text with cursor
+    if (m_isEditingText) {
+        D2D1_RECT_F imageRect = m_renderer->GetScreenImageRect();
+        float imageW = imageRect.right - imageRect.left;
+
+        Renderer::TextOverlay rt;
+        rt.text = m_editingText + L"|";  // Cursor character
+        rt.x = m_editingTextX;
+        rt.y = m_editingTextY;
+        rt.color = D2D1::ColorF(D2D1::ColorF::White);
+        rt.fontSize = 24.0f / imageW;
+        rendererTexts.push_back(rt);
+    }
+
     m_renderer->SetTextOverlays(rendererTexts);
 }
 
@@ -860,6 +875,13 @@ void App::ApplyCrop() {
 }
 
 void App::OnKeyDown(UINT key) {
+    // When editing text, only handle Escape, Enter, and Backspace
+    if (m_isEditingText) {
+        if (key != VK_ESCAPE && key != VK_RETURN && key != VK_BACK) {
+            return;  // Let OnChar handle printable characters
+        }
+    }
+
     DWORD now = GetTickCount();
     bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
     bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
@@ -907,7 +929,13 @@ void App::OnKeyDown(UINT key) {
         break;
 
     case VK_ESCAPE:
-        if (m_editMode != EditMode::None) {
+        if (m_isEditingText) {
+            // Cancel text editing
+            m_isEditingText = false;
+            m_editingText.clear();
+            UpdateRendererText();
+            InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
+        } else if (m_editMode != EditMode::None) {
             CancelCurrentMode();
         } else if (m_window->IsFullscreen()) {
             ToggleFullscreen();
@@ -917,8 +945,34 @@ void App::OnKeyDown(UINT key) {
         break;
 
     case VK_RETURN:
-        if (m_editMode == EditMode::Crop) {
+        if (m_isEditingText) {
+            // Commit the text
+            if (!m_editingText.empty()) {
+                D2D1_RECT_F imageRect = m_renderer->GetScreenImageRect();
+                float imageW = imageRect.right - imageRect.left;
+
+                TextOverlay text;
+                text.x = m_editingTextX;
+                text.y = m_editingTextY;
+                text.text = m_editingText;
+                text.color = D2D1::ColorF(D2D1::ColorF::White);
+                text.fontSize = 24.0f / imageW;
+                m_textOverlays.push_back(text);
+            }
+            m_isEditingText = false;
+            m_editingText.clear();
+            UpdateRendererText();
+            InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
+        } else if (m_editMode == EditMode::Crop) {
             ApplyCrop();
+        }
+        break;
+
+    case VK_BACK:
+        if (m_isEditingText && !m_editingText.empty()) {
+            m_editingText.pop_back();
+            UpdateRendererText();
+            InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
         }
         break;
 
@@ -1014,6 +1068,17 @@ void App::OnKeyUp(UINT key) {
     }
 }
 
+void App::OnChar(wchar_t ch) {
+    if (m_isEditingText) {
+        // Ignore control characters (handled by OnKeyDown)
+        if (ch >= 32) {  // Printable characters
+            m_editingText += ch;
+            UpdateRendererText();
+            InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
+        }
+    }
+}
+
 void App::OnMouseWheel(int delta) {
     if (delta > 0) {
         ZoomIn();
@@ -1054,28 +1119,13 @@ void App::OnMouseDown(int x, int y) {
         float imageW = imageRect.right - imageRect.left;
         float imageH = imageRect.bottom - imageRect.top;
         if (imageW > 0 && imageH > 0) {
-            // Simple text input dialog
-            wchar_t inputText[256] = L"";
-            HWND hwnd = m_window->GetHwnd();
-
-            // Create a simple input using a message box workaround isn't ideal
-            // Use a proper dialog resource or prompt
-            // For now, use a simple hardcoded prompt approach
-            if (MessageBoxW(hwnd, L"Enter text (OK for 'Text', Cancel to abort):",
-                           L"Add Text", MB_OKCANCEL) == IDOK) {
-                float normX = (static_cast<float>(x) - imageRect.left) / imageW;
-                float normY = (static_cast<float>(y) - imageRect.top) / imageH;
-
-                TextOverlay text;
-                text.x = normX;
-                text.y = normY;
-                text.text = L"Text";  // TODO: proper input dialog
-                text.color = D2D1::ColorF(D2D1::ColorF::White);
-                text.fontSize = 24.0f / imageW;  // Normalize font size
-                m_textOverlays.push_back(text);
-                UpdateRendererText();
-                InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
-            }
+            // Start inline text editing at click position
+            m_isEditingText = true;
+            m_editingText.clear();
+            m_editingTextX = (static_cast<float>(x) - imageRect.left) / imageW;
+            m_editingTextY = (static_cast<float>(y) - imageRect.top) / imageH;
+            UpdateRendererText();
+            InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
         }
     } else {
         m_isPanning = true;

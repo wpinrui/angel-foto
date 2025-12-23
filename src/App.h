@@ -17,6 +17,7 @@ public:
     // Event handlers (called by Window)
     void OnKeyDown(UINT key);
     void OnKeyUp(UINT key);
+    void OnChar(wchar_t ch);
     void OnMouseWheel(int delta);
     void OnMouseDown(int x, int y);
     void OnMouseUp(int x, int y);
@@ -129,4 +130,10 @@ private:
         float fontSize;
     };
     std::vector<TextOverlay> m_textOverlays;
+
+    // Text editing state
+    bool m_isEditingText = false;
+    std::wstring m_editingText;
+    float m_editingTextX = 0;
+    float m_editingTextY = 0;
 };

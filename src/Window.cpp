@@ -168,6 +168,12 @@ LRESULT Window::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         }
         return 0;
 
+    case WM_CHAR:
+        if (m_app) {
+            m_app->OnChar(static_cast<wchar_t>(wParam));
+        }
+        return 0;
+
     case WM_MOUSEWHEEL:
         if (m_app) {
             int delta = GET_WHEEL_DELTA_WPARAM(wParam);
