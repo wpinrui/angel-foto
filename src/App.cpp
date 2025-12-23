@@ -628,11 +628,17 @@ bool App::SaveImageToFile(const std::wstring& filePath) {
         float screenH = screenImageRect.bottom - screenImageRect.top;
 
         // Scale factor: screen coords to output image coords
-        // width/height are the final output image dimensions
         float scaleX = (screenW > 0) ? (float)width / screenW : 1.0f;
         float scaleY = (screenH > 0) ? (float)height / screenH : 1.0f;
         float offsetX = screenImageRect.left;
         float offsetY = screenImageRect.top;
+
+        // DEBUG: Log values
+        wchar_t dbg[512];
+        swprintf_s(dbg, L"Strokes: %zu\nScreenRect: %.0f,%.0f,%.0f,%.0f\nScale: %.2f,%.2f\nOutput: %ux%u",
+            m_markupStrokes.size(), screenImageRect.left, screenImageRect.top, screenImageRect.right, screenImageRect.bottom,
+            scaleX, scaleY, width, height);
+        MessageBoxW(nullptr, dbg, L"Markup Debug", MB_OK);
 
         ComPtr<ID2D1RenderTarget> rt;
         D2D1_RENDER_TARGET_PROPERTIES rtProps = D2D1::RenderTargetProperties(
@@ -640,6 +646,9 @@ bool App::SaveImageToFile(const std::wstring& filePath) {
             D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED)
         );
         hr = d2dFactory->CreateWicBitmapRenderTarget(wicBitmap.Get(), rtProps, &rt);
+        if (FAILED(hr)) {
+            MessageBoxW(nullptr, L"CreateWicBitmapRenderTarget FAILED", L"Error", MB_OK);
+        }
         if (SUCCEEDED(hr)) {
             rt->BeginDraw();
 
@@ -683,7 +692,10 @@ bool App::SaveImageToFile(const std::wstring& filePath) {
                 }
             }
 
-            rt->EndDraw();
+            hr = rt->EndDraw();
+            if (FAILED(hr)) {
+                MessageBoxW(nullptr, L"EndDraw FAILED", L"Error", MB_OK);
+            }
         }
     }
 
