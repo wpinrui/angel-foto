@@ -548,17 +548,28 @@ void App::SaveImage() {
 
     // If there are edits (markups, text, crop), ask user what to do
     if (HasPendingEdits()) {
-        int result = MessageBox(m_window->GetHwnd(),
-            L"The image has markups or crop applied.\n\n"
-            L"Choose how to save:\n"
-            L"  Yes = Save a copy (original preserved)\n"
-            L"  No = Overwrite original\n"
-            L"  Cancel = Don't save",
-            L"Save Image",
-            MB_YESNOCANCEL | MB_ICONQUESTION);
+        TASKDIALOGCONFIG config = {};
+        config.cbSize = sizeof(config);
+        config.hwndParent = m_window->GetHwnd();
+        config.dwFlags = TDF_USE_COMMAND_LINKS;
+        config.pszWindowTitle = L"Save Image";
+        config.pszMainIcon = TD_INFORMATION_ICON;
+        config.pszMainInstruction = L"The image has markups or crop applied.";
+        config.pszContent = L"How would you like to save?";
 
-        if (result == IDCANCEL) return;
-        saveCopy = (result == IDYES);
+        TASKDIALOG_BUTTON buttons[] = {
+            { 100, L"Save Copy\nOriginal file preserved" },
+            { 101, L"Overwrite\nReplace original file" },
+            { 102, L"Cancel\nDon't save" }
+        };
+        config.pButtons = buttons;
+        config.cButtons = ARRAYSIZE(buttons);
+
+        int clicked = 0;
+        if (FAILED(TaskDialogIndirect(&config, &clicked, nullptr, nullptr))) return;
+
+        if (clicked == 102) return;  // Cancel
+        saveCopy = (clicked == 100);
     }
 
     if (saveCopy) {

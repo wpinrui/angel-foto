@@ -7,6 +7,8 @@
 #include <shellapi.h>
 #include <shlwapi.h>
 #include <shobjidl.h>
+#include <commctrl.h>
+#pragma comment(lib, "comctl32.lib")
 
 // DXGI and Direct3D
 #include <dxgi1_2.h>
