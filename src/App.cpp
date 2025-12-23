@@ -544,9 +544,9 @@ bool App::SaveImageToFile(const std::wstring& filePath) {
 
     bool hasOverlays = !m_markupStrokes.empty() || !m_textOverlays.empty();
 
-    // Use 32bppBGRA for D2D rendering when we have overlays
+    // Use 32bppPBGRA (premultiplied) for D2D rendering when we have overlays
     WICPixelFormatGUID targetPixelFormat = hasOverlays ?
-        GUID_WICPixelFormat32bppBGRA :
+        GUID_WICPixelFormat32bppPBGRA :
         ((containerFormat == GUID_ContainerFormatJpeg || containerFormat == GUID_ContainerFormatBmp) ?
             GUID_WICPixelFormat24bppBGR : GUID_WICPixelFormat32bppBGRA);
 
@@ -606,7 +606,7 @@ bool App::SaveImageToFile(const std::wstring& filePath) {
     source->GetSize(&width, &height);
 
     // Always materialize to a WIC bitmap to avoid streaming issues
-    UINT bpp = (targetPixelFormat == GUID_WICPixelFormat32bppBGRA) ? 4 : 3;
+    UINT bpp = (targetPixelFormat == GUID_WICPixelFormat32bppBGRA || targetPixelFormat == GUID_WICPixelFormat32bppPBGRA) ? 4 : 3;
     UINT stride = ((width * bpp) + 3) & ~3;  // DWORD-aligned stride
     std::vector<BYTE> buffer(stride * height);
 
