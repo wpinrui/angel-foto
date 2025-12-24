@@ -1200,6 +1200,58 @@ void App::ApplyCrop() {
 
     if (cropW <= 0 || cropH <= 0) return;
 
+    // Get original image size before crop
+    float origW = static_cast<float>(m_currentImage->width);
+    float origH = static_cast<float>(m_currentImage->height);
+
+    // Transform markup strokes to new cropped coordinate space
+    std::vector<MarkupStroke> transformedStrokes;
+    for (const auto& stroke : m_markupStrokes) {
+        MarkupStroke newStroke;
+        newStroke.color = stroke.color;
+        newStroke.width = stroke.width * (origW / cropW);  // Adjust width for new scale
+
+        for (const auto& pt : stroke.points) {
+            // Convert from normalized to pixel coords
+            float pixelX = pt.x * origW;
+            float pixelY = pt.y * origH;
+
+            // Check if point is inside crop rect
+            if (pixelX >= cropX && pixelX <= cropX + cropW &&
+                pixelY >= cropY && pixelY <= cropY + cropH) {
+                // Transform to new normalized coords
+                float newNormX = (pixelX - cropX) / cropW;
+                float newNormY = (pixelY - cropY) / cropH;
+                newStroke.points.push_back(D2D1::Point2F(newNormX, newNormY));
+            }
+        }
+
+        // Only keep strokes that have at least 2 points after cropping
+        if (newStroke.points.size() >= 2) {
+            transformedStrokes.push_back(newStroke);
+        }
+    }
+    m_markupStrokes = transformedStrokes;
+
+    // Transform text overlays to new cropped coordinate space
+    std::vector<TextOverlay> transformedTexts;
+    for (const auto& text : m_textOverlays) {
+        // Convert from normalized to pixel coords
+        float pixelX = text.x * origW;
+        float pixelY = text.y * origH;
+
+        // Check if text origin is inside crop rect
+        if (pixelX >= cropX && pixelX <= cropX + cropW &&
+            pixelY >= cropY && pixelY <= cropY + cropH) {
+            TextOverlay newText = text;
+            newText.x = (pixelX - cropX) / cropW;
+            newText.y = (pixelY - cropY) / cropH;
+            newText.fontSize = text.fontSize * (origW / cropW);  // Adjust font size
+            transformedTexts.push_back(newText);
+        }
+    }
+    m_textOverlays = transformedTexts;
+
     // Store crop for saving
     m_hasCrop = true;
     m_appliedCrop = { cropX, cropY, cropW, cropH };
@@ -1227,6 +1279,8 @@ void App::ApplyCrop() {
     m_currentImage->height = cropH;
 
     m_renderer->SetImage(m_currentImage->bitmap);
+    UpdateRendererMarkup();
+    UpdateRendererText();
     CancelCurrentMode();
 }
 
