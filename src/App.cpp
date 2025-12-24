@@ -1159,10 +1159,23 @@ void App::Undo() {
     EditState state = m_undoStack.back();
     m_undoStack.pop_back();
 
+    // Check if we're undoing a crop (need to reload image)
+    bool wasCopped = m_hasCrop;
+    bool willBeCropped = state.hasCrop;
+
     m_markupStrokes = state.strokes;
     m_textOverlays = state.texts;
     m_hasCrop = state.hasCrop;
     m_appliedCrop = state.appliedCrop;
+
+    // If undoing a crop, reload the original image
+    if (wasCopped && !willBeCropped && m_currentImage) {
+        std::wstring filePath = m_currentImage->filePath;
+        m_currentImage = m_imageLoader->LoadImage(filePath);
+        if (m_currentImage) {
+            m_renderer->SetImage(m_currentImage->bitmap);
+        }
+    }
 
     UpdateRendererMarkup();
     UpdateRendererText();
