@@ -254,7 +254,7 @@ void Renderer::ResetView() {
 }
 
 void Renderer::SetRotation(int degrees) {
-    m_rotation = degrees % 360;
+    m_rotation = degrees % Rotation::FULL_ROTATION;
 }
 
 void Renderer::SetCropMode(bool enabled) {
@@ -325,7 +325,7 @@ D2D1_RECT_F Renderer::CalculateImageRect() const {
     float imageHeight = imageSize.height;
 
     // Swap dimensions for 90/270 degree rotations
-    if (m_rotation == 90 || m_rotation == 270) {
+    if (m_rotation == Rotation::CW_90 || m_rotation == Rotation::CW_270) {
         std::swap(imageWidth, imageHeight);
     }
 
@@ -429,7 +429,7 @@ void Renderer::Render() {
         D2D1_RECT_F destRect = CalculateImageRect();
 
         // Apply rotation transform
-        if (m_rotation != 0) {
+        if (m_rotation != Rotation::NONE) {
             float centerX = (destRect.left + destRect.right) / 2.0f;
             float centerY = (destRect.top + destRect.bottom) / 2.0f;
             m_deviceContext->SetTransform(
@@ -438,7 +438,7 @@ void Renderer::Render() {
             );
 
             // Adjust destRect for rotated image
-            if (m_rotation == 90 || m_rotation == 270) {
+            if (m_rotation == Rotation::CW_90 || m_rotation == Rotation::CW_270) {
                 float w = destRect.right - destRect.left;
                 float h = destRect.bottom - destRect.top;
                 destRect = D2D1::RectF(

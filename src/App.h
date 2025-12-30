@@ -253,5 +253,5 @@ private:
 
     // Undo stack
     std::vector<EditState> m_undoStack;
-    static const size_t MAX_UNDO_LEVELS = 50;
+    static constexpr size_t MAX_UNDO_LEVELS = 50;
 };
