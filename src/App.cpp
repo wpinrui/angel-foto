@@ -1,5 +1,9 @@
 #include "pch.h"
 #include "App.h"
+#include "Window.h"
+#include "ImageLoader.h"
+#include "ImageCache.h"
+#include "FolderNavigator.h"
 
 App* App::s_instance = nullptr;
 
@@ -998,44 +1002,28 @@ void App::CancelCurrentMode() {
 }
 
 void App::UpdateRendererMarkup() {
-    std::vector<Renderer::MarkupStroke> rendererStrokes;
-    for (const auto& stroke : m_markupStrokes) {
-        Renderer::MarkupStroke rs;
-        rs.points = stroke.points;
-        rs.color = stroke.color;
-        rs.width = stroke.width;
-        rendererStrokes.push_back(rs);
-    }
-    m_renderer->SetMarkupStrokes(rendererStrokes);
+    m_renderer->SetMarkupStrokes(m_markupStrokes);
 }
 
 void App::UpdateRendererText() {
-    std::vector<Renderer::TextOverlay> rendererTexts;
-    for (const auto& text : m_textOverlays) {
-        Renderer::TextOverlay rt;
-        rt.text = text.text;
-        rt.x = text.x;
-        rt.y = text.y;
-        rt.color = text.color;
-        rt.fontSize = text.fontSize;
-        rendererTexts.push_back(rt);
-    }
+    // Start with existing overlays
+    std::vector<TextOverlay> overlays = m_textOverlays;
 
     // Add editing text with cursor
     if (m_isEditingText) {
         D2D1_RECT_F imageRect = m_renderer->GetScreenImageRect();
         float imageW = imageRect.right - imageRect.left;
 
-        Renderer::TextOverlay rt;
-        rt.text = m_editingText + L"|";  // Cursor character
-        rt.x = m_editingTextX;
-        rt.y = m_editingTextY;
-        rt.color = D2D1::ColorF(D2D1::ColorF::White);
-        rt.fontSize = DEFAULT_TEXT_FONT_SIZE / imageW;
-        rendererTexts.push_back(rt);
+        TextOverlay cursorOverlay;
+        cursorOverlay.text = m_editingText + L"|";
+        cursorOverlay.x = m_editingTextX;
+        cursorOverlay.y = m_editingTextY;
+        cursorOverlay.color = D2D1::ColorF(D2D1::ColorF::White);
+        cursorOverlay.fontSize = DEFAULT_TEXT_FONT_SIZE / imageW;
+        overlays.push_back(cursorOverlay);
     }
 
-    m_renderer->SetTextOverlays(rendererTexts);
+    m_renderer->SetTextOverlays(overlays);
 }
 
 bool App::ScreenToNormalizedImageCoords(int screenX, int screenY, float& normX, float& normY) const {

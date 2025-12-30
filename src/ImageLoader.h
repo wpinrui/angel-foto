@@ -39,4 +39,9 @@ private:
     IWICImagingFactory* m_wicFactory = nullptr;
 
     static const std::vector<std::wstring> s_supportedExtensions;
+
+    // GIF animation constants
+    static constexpr UINT DEFAULT_FRAME_DELAY_MS = 100;
+    static constexpr UINT MIN_FRAME_DELAY_MS = 20;
+    static constexpr UINT CENTISECONDS_TO_MS = 10;
 };

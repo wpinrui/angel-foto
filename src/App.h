@@ -1,10 +1,12 @@
 #pragma once
 #include "pch.h"
-#include "Window.h"
 #include "Renderer.h"
 #include "ImageLoader.h"
-#include "ImageCache.h"
-#include "FolderNavigator.h"
+
+// Forward declarations
+class Window;
+class ImageCache;
+class FolderNavigator;
 
 class App {
 public:
@@ -28,20 +30,9 @@ public:
     // File operations
     void OpenFile(const std::wstring& filePath);
 
-    // Markup drawing (public for helper function access)
-    struct MarkupStroke {
-        std::vector<D2D1_POINT_2F> points;
-        D2D1_COLOR_F color;
-        float width;
-    };
-
-    // Text overlay (public for helper function access)
-    struct TextOverlay {
-        std::wstring text;
-        float x, y;
-        D2D1_COLOR_F color;
-        float fontSize;
-    };
+    // Use Renderer's types to avoid duplication
+    using MarkupStroke = Renderer::MarkupStroke;
+    using TextOverlay = Renderer::TextOverlay;
 
     // Text rendering constants (public for helper function access)
     static constexpr wchar_t DEFAULT_FONT_NAME[] = L"Segoe UI";

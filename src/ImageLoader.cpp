@@ -159,14 +159,14 @@ std::shared_ptr<ImageData> ImageLoader::LoadAnimatedGif(const std::wstring& file
         if (FAILED(hr)) continue;
 
         // Get frame delay
-        UINT delay = 100; // Default 100ms
+        UINT delay = DEFAULT_FRAME_DELAY_MS;
         ComPtr<IWICMetadataQueryReader> frameMetadata;
         if (SUCCEEDED(frame->GetMetadataQueryReader(&frameMetadata))) {
             PROPVARIANT propValue;
             PropVariantInit(&propValue);
             if (SUCCEEDED(frameMetadata->GetMetadataByName(L"/grctlext/Delay", &propValue))) {
-                delay = propValue.uiVal * 10; // Convert from centiseconds to milliseconds
-                if (delay < 20) delay = 100; // Minimum reasonable delay
+                delay = propValue.uiVal * CENTISECONDS_TO_MS;
+                if (delay < MIN_FRAME_DELAY_MS) delay = DEFAULT_FRAME_DELAY_MS;
                 PropVariantClear(&propValue);
             }
         }
