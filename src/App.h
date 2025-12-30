@@ -36,6 +36,9 @@ public:
 
     // Image format constants (public for helper function access)
     static constexpr UINT RGBA_BYTES_PER_PIXEL = 4;
+    static constexpr size_t MIN_STROKE_POINTS = 2;  // Minimum points to form a valid stroke
+    static constexpr WORD BITMAP_BITS_PER_PIXEL = 32;
+    static constexpr WORD BITMAP_PLANES = 1;
 
     // Helper to calculate bitmap stride (width * bytes per pixel)
     static UINT GetBitmapStride(UINT width) { return width * RGBA_BYTES_PER_PIXEL; }

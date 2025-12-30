@@ -73,7 +73,7 @@ static std::vector<App::MarkupStroke> TransformMarkupStrokesForCrop(
             }
         }
 
-        if (newStroke.points.size() >= 2) {
+        if (newStroke.points.size() >= App::MIN_STROKE_POINTS) {
             result.push_back(newStroke);
         }
     }
@@ -118,7 +118,7 @@ static void RenderMarkupAndTextToTarget(
 {
     // Draw markup strokes (normalized coords scaled to output size)
     for (const auto& stroke : strokes) {
-        if (stroke.points.size() < 2) continue;
+        if (stroke.points.size() < App::MIN_STROKE_POINTS) continue;
         ComPtr<ID2D1SolidColorBrush> brush;
         renderTarget->CreateSolidColorBrush(stroke.color, &brush);
         if (!brush) continue;
@@ -246,8 +246,8 @@ static void InitializeDIBHeader(BITMAPINFOHEADER& bi, UINT width, UINT height) {
     bi.biSize = sizeof(BITMAPINFOHEADER);
     bi.biWidth = width;
     bi.biHeight = height;  // Positive = bottom-up
-    bi.biPlanes = 1;
-    bi.biBitCount = 32;
+    bi.biPlanes = App::BITMAP_PLANES;
+    bi.biBitCount = App::BITMAP_BITS_PER_PIXEL;
     bi.biCompression = BI_RGB;
 }
 
