@@ -44,4 +44,9 @@ private:
     static constexpr UINT DEFAULT_FRAME_DELAY_MS = 100;
     static constexpr UINT MIN_FRAME_DELAY_MS = 20;
     static constexpr UINT CENTISECONDS_TO_MS = 10;
+
+    // GIF metadata query paths
+    static constexpr wchar_t GIF_METADATA_WIDTH[] = L"/logscrdesc/Width";
+    static constexpr wchar_t GIF_METADATA_HEIGHT[] = L"/logscrdesc/Height";
+    static constexpr wchar_t GIF_METADATA_DELAY[] = L"/grctlext/Delay";
 };

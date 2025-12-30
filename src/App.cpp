@@ -496,26 +496,17 @@ void App::UpdateTitle() {
 
         // Add GIF pause indicator
         if (m_currentImage->isAnimated && m_gifPaused) {
-            title += L" (paused)";
+            title += TITLE_SUFFIX_PAUSED;
         }
     }
 
     // Add edit mode indicator
     switch (m_editMode) {
-    case EditMode::Crop:
-        title += L" [CROP - drag to select, Enter to apply, Esc to cancel]";
-        break;
-    case EditMode::Markup:
-        title += L" [MARKUP - drag to draw, Esc to exit]";
-        break;
-    case EditMode::Text:
-        title += L" [TEXT - click to add text, Esc to exit]";
-        break;
-    case EditMode::Erase:
-        title += L" [ERASE - click on markup/text to delete, Esc to exit]";
-        break;
-    default:
-        break;
+    case EditMode::Crop:   title += TITLE_SUFFIX_CROP;   break;
+    case EditMode::Markup: title += TITLE_SUFFIX_MARKUP; break;
+    case EditMode::Text:   title += TITLE_SUFFIX_TEXT;   break;
+    case EditMode::Erase:  title += TITLE_SUFFIX_ERASE;  break;
+    default: break;
     }
 
     m_window->SetTitle(title);

@@ -221,6 +221,13 @@ private:
     static constexpr UINT SAVE_FILTER_JPEG_INDEX = 2;
     static constexpr UINT SAVE_FILTER_BMP_INDEX = 3;
 
+    // Edit mode title suffixes (shown in window title when mode is active)
+    static constexpr wchar_t TITLE_SUFFIX_CROP[] = L" [CROP - drag to select, Enter to apply, Esc to cancel]";
+    static constexpr wchar_t TITLE_SUFFIX_MARKUP[] = L" [MARKUP - drag to draw, Esc to exit]";
+    static constexpr wchar_t TITLE_SUFFIX_TEXT[] = L" [TEXT - click to add text, Esc to exit]";
+    static constexpr wchar_t TITLE_SUFFIX_ERASE[] = L" [ERASE - click on markup/text to delete, Esc to exit]";
+    static constexpr wchar_t TITLE_SUFFIX_PAUSED[] = L" (paused)";
+
     // Rotation state (0, 90, 180, 270 degrees)
     int m_rotation = 0;
 

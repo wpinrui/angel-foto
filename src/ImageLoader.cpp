@@ -130,11 +130,11 @@ std::shared_ptr<ImageData> ImageLoader::LoadAnimatedGif(const std::wstring& file
         PROPVARIANT propValue;
         PropVariantInit(&propValue);
 
-        if (SUCCEEDED(globalMetadata->GetMetadataByName(L"/logscrdesc/Width", &propValue))) {
+        if (SUCCEEDED(globalMetadata->GetMetadataByName(GIF_METADATA_WIDTH, &propValue))) {
             canvasWidth = propValue.uiVal;
             PropVariantClear(&propValue);
         }
-        if (SUCCEEDED(globalMetadata->GetMetadataByName(L"/logscrdesc/Height", &propValue))) {
+        if (SUCCEEDED(globalMetadata->GetMetadataByName(GIF_METADATA_HEIGHT, &propValue))) {
             canvasHeight = propValue.uiVal;
             PropVariantClear(&propValue);
         }
@@ -158,7 +158,7 @@ std::shared_ptr<ImageData> ImageLoader::LoadAnimatedGif(const std::wstring& file
         if (SUCCEEDED(frame->GetMetadataQueryReader(&frameMetadata))) {
             PROPVARIANT propValue;
             PropVariantInit(&propValue);
-            if (SUCCEEDED(frameMetadata->GetMetadataByName(L"/grctlext/Delay", &propValue))) {
+            if (SUCCEEDED(frameMetadata->GetMetadataByName(GIF_METADATA_DELAY, &propValue))) {
                 delay = propValue.uiVal * CENTISECONDS_TO_MS;
                 if (delay < MIN_FRAME_DELAY_MS) delay = DEFAULT_FRAME_DELAY_MS;
                 PropVariantClear(&propValue);
