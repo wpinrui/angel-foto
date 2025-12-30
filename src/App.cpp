@@ -406,12 +406,56 @@ void App::CopyToClipboard() {
     hr = rt->EndDraw();
     if (FAILED(hr)) return;
 
-    // Copy pixels from WIC bitmap
+    // Copy pixels from WIC bitmap for DIB format
     UINT stride = width * 4;
     std::vector<BYTE> buffer(stride * height);
     WICRect rcCopy = { 0, 0, (INT)width, (INT)height };
     hr = wicBitmap->CopyPixels(&rcCopy, stride, (UINT)buffer.size(), buffer.data());
     if (FAILED(hr)) return;
+
+    // Encode to PNG for browser compatibility
+    ComPtr<IStream> pngStream;
+    hr = CreateStreamOnHGlobal(nullptr, TRUE, &pngStream);
+    if (FAILED(hr)) return;
+
+    ComPtr<IWICBitmapEncoder> encoder;
+    hr = wicFactory->CreateEncoder(GUID_ContainerFormatPng, nullptr, &encoder);
+    if (FAILED(hr)) return;
+
+    hr = encoder->Initialize(pngStream.Get(), WICBitmapEncoderNoCache);
+    if (FAILED(hr)) return;
+
+    ComPtr<IWICBitmapFrameEncode> frameEncode;
+    hr = encoder->CreateNewFrame(&frameEncode, nullptr);
+    if (FAILED(hr)) return;
+
+    hr = frameEncode->Initialize(nullptr);
+    if (FAILED(hr)) return;
+
+    hr = frameEncode->SetSize(width, height);
+    if (FAILED(hr)) return;
+
+    WICPixelFormatGUID pixelFormat = GUID_WICPixelFormat32bppBGRA;
+    hr = frameEncode->SetPixelFormat(&pixelFormat);
+    if (FAILED(hr)) return;
+
+    hr = frameEncode->WriteSource(wicBitmap.Get(), nullptr);
+    if (FAILED(hr)) return;
+
+    hr = frameEncode->Commit();
+    if (FAILED(hr)) return;
+
+    hr = encoder->Commit();
+    if (FAILED(hr)) return;
+
+    // Get PNG data from stream
+    HGLOBAL hPng = nullptr;
+    hr = GetHGlobalFromStream(pngStream.Get(), &hPng);
+    if (FAILED(hr)) return;
+
+    STATSTG stat;
+    pngStream->Stat(&stat, STATFLAG_NONAME);
+    SIZE_T pngSize = static_cast<SIZE_T>(stat.cbSize.QuadPart);
 
     // Create DIB for clipboard
     BITMAPINFOHEADER bi = {};
@@ -422,26 +466,49 @@ void App::CopyToClipboard() {
     bi.biBitCount = 32;
     bi.biCompression = BI_RGB;
 
-    HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, sizeof(BITMAPINFOHEADER) + buffer.size());
-    if (!hMem) return;
+    HGLOBAL hDib = GlobalAlloc(GMEM_MOVEABLE, sizeof(BITMAPINFOHEADER) + buffer.size());
+    if (!hDib) return;
 
-    void* pMem = GlobalLock(hMem);
-    if (!pMem) {
-        GlobalFree(hMem);
-        return;
+    void* pDib = GlobalLock(hDib);
+    if (pDib) {
+        memcpy(pDib, &bi, sizeof(BITMAPINFOHEADER));
+        memcpy(static_cast<BYTE*>(pDib) + sizeof(BITMAPINFOHEADER), buffer.data(), buffer.size());
+        GlobalUnlock(hDib);
     }
 
-    memcpy(pMem, &bi, sizeof(BITMAPINFOHEADER));
-    memcpy(static_cast<BYTE*>(pMem) + sizeof(BITMAPINFOHEADER), buffer.data(), buffer.size());
-    GlobalUnlock(hMem);
+    // Copy PNG to new HGLOBAL (the stream's HGLOBAL can't be used directly)
+    HGLOBAL hPngCopy = GlobalAlloc(GMEM_MOVEABLE, pngSize);
+    if (hPngCopy) {
+        void* pPngSrc = GlobalLock(hPng);
+        void* pPngDst = GlobalLock(hPngCopy);
+        if (pPngSrc && pPngDst) {
+            memcpy(pPngDst, pPngSrc, pngSize);
+        }
+        GlobalUnlock(hPng);
+        GlobalUnlock(hPngCopy);
+    }
 
+    // Set clipboard with multiple formats
     if (OpenClipboard(m_window->GetHwnd())) {
         EmptyClipboard();
-        SetClipboardData(CF_DIB, hMem);
+
+        // PNG format for browsers and modern apps
+        UINT pngFormat = RegisterClipboardFormatW(L"PNG");
+        if (pngFormat && hPngCopy) {
+            SetClipboardData(pngFormat, hPngCopy);
+            hPngCopy = nullptr; // Clipboard owns it now
+        }
+
+        // DIB format for traditional apps
+        SetClipboardData(CF_DIB, hDib);
+        hDib = nullptr; // Clipboard owns it now
+
         CloseClipboard();
-    } else {
-        GlobalFree(hMem);
     }
+
+    // Clean up any handles not taken by clipboard
+    if (hDib) GlobalFree(hDib);
+    if (hPngCopy) GlobalFree(hPngCopy);
 }
 
 void App::SetAsWallpaper() {
