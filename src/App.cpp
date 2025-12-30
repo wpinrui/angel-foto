@@ -19,20 +19,13 @@ App::~App() {
     s_instance = nullptr;
 }
 
-// Helper to convert string to lowercase
-static std::wstring ToLowerCase(const std::wstring& str) {
-    std::wstring result = str;
-    std::transform(result.begin(), result.end(), result.begin(), ::towlower);
-    return result;
-}
-
 // Helper to convert rotation degrees to WIC transform option
 static WICBitmapTransformOptions GetWICTransformForRotation(int rotation) {
     switch (rotation) {
-    case 90:  return WICBitmapTransformRotate90;
-    case 180: return WICBitmapTransformRotate180;
-    case 270: return WICBitmapTransformRotate270;
-    default:  return WICBitmapTransformRotate0;
+    case Rotation::CW_90:  return WICBitmapTransformRotate90;
+    case Rotation::CW_180: return WICBitmapTransformRotate180;
+    case Rotation::CW_270: return WICBitmapTransformRotate270;
+    default:               return WICBitmapTransformRotate0;
     }
 }
 
@@ -127,33 +120,33 @@ ComPtr<IWICBitmapSource> App::LoadAndDecodeImage(IWICImagingFactory* wicFactory,
     HRESULT hr = wicFactory->CreateDecoderFromFilename(
         m_currentImage->filePath.c_str(), nullptr, GENERIC_READ,
         WICDecodeMetadataCacheOnDemand, &decoder);
-    if (FAILED(hr)) return nullptr;
+    CHECK_HR_RETURN_NULL(hr);
 
     ComPtr<IWICBitmapFrameDecode> frameDecode;
     hr = decoder->GetFrame(0, &frameDecode);
-    if (FAILED(hr)) return nullptr;
+    CHECK_HR_RETURN_NULL(hr);
 
     ComPtr<IWICFormatConverter> converter;
     hr = wicFactory->CreateFormatConverter(&converter);
-    if (FAILED(hr)) return nullptr;
+    CHECK_HR_RETURN_NULL(hr);
 
     hr = converter->Initialize(frameDecode.Get(), targetFormat,
         WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom);
-    if (FAILED(hr)) return nullptr;
+    CHECK_HR_RETURN_NULL(hr);
 
     return converter;
 }
 
 // Apply rotation transformation to WIC bitmap source
 ComPtr<IWICBitmapSource> App::ApplyWICRotation(IWICImagingFactory* wicFactory, IWICBitmapSource* source) {
-    if (m_rotation == 0 || !source) return source;
+    if (m_rotation == Rotation::NONE || !source) return source;
 
     ComPtr<IWICBitmapFlipRotator> rotator;
     HRESULT hr = wicFactory->CreateBitmapFlipRotator(&rotator);
-    if (FAILED(hr)) return nullptr;
+    CHECK_HR_RETURN_NULL(hr);
 
     hr = rotator->Initialize(source, GetWICTransformForRotation(m_rotation));
-    if (FAILED(hr)) return nullptr;
+    CHECK_HR_RETURN_NULL(hr);
 
     return rotator;
 }
@@ -164,10 +157,10 @@ ComPtr<IWICBitmapSource> App::ApplyWICCrop(IWICImagingFactory* wicFactory, IWICB
 
     ComPtr<IWICBitmapClipper> clipper;
     HRESULT hr = wicFactory->CreateBitmapClipper(&clipper);
-    if (FAILED(hr)) return nullptr;
+    CHECK_HR_RETURN_NULL(hr);
 
     hr = clipper->Initialize(source, &m_appliedCrop);
-    if (FAILED(hr)) return nullptr;
+    CHECK_HR_RETURN_NULL(hr);
 
     return clipper;
 }
@@ -182,7 +175,7 @@ ComPtr<IWICBitmap> App::CreateWICBitmapWithOverlays(IWICImagingFactory* wicFacto
 
     ComPtr<IWICBitmap> wicBitmap;
     hr = wicFactory->CreateBitmapFromSource(source, WICBitmapCacheOnLoad, &wicBitmap);
-    if (FAILED(hr)) return nullptr;
+    CHECK_HR_RETURN_NULL(hr);
 
     // Render markup and text overlays
     ComPtr<ID2D1RenderTarget> renderTarget;
@@ -191,13 +184,13 @@ ComPtr<IWICBitmap> App::CreateWICBitmapWithOverlays(IWICImagingFactory* wicFacto
         D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED)
     );
     hr = d2dFactory->CreateWicBitmapRenderTarget(wicBitmap.Get(), renderTargetProps, &renderTarget);
-    if (FAILED(hr)) return nullptr;
+    CHECK_HR_RETURN_NULL(hr);
 
     renderTarget->BeginDraw();
     RenderMarkupAndTextToTarget(renderTarget.Get(), static_cast<float>(width), static_cast<float>(height),
         m_markupStrokes, m_textOverlays);
     hr = renderTarget->EndDraw();
-    if (FAILED(hr)) return nullptr;
+    CHECK_HR_RETURN_NULL(hr);
 
     return wicBitmap;
 }
@@ -215,7 +208,7 @@ static void InitializeDIBHeader(BITMAPINFOHEADER& bi, UINT width, UINT height) {
 
 // Get fully transformed image with all overlays applied (rotation, crop, markup, text)
 ComPtr<IWICBitmap> App::GetTransformedImageWithOverlays(IWICImagingFactory* wicFactory, ID2D1Factory* d2dFactory) {
-    ComPtr<IWICBitmapSource> source = LoadAndDecodeImage(wicFactory, GUID_WICPixelFormat32bppPBGRA);
+    ComPtr<IWICBitmapSource> source = LoadAndDecodeImage(wicFactory, WIC_PIXEL_FORMAT_PREMULTIPLIED);
     if (!source) return nullptr;
 
     source = ApplyWICRotation(wicFactory, source.Get());
@@ -264,39 +257,39 @@ HGLOBAL App::EncodeBitmapToPNG(IWICImagingFactory* wicFactory, IWICBitmap* bitma
 
     ComPtr<IStream> pngStream;
     HRESULT hr = CreateStreamOnHGlobal(nullptr, TRUE, &pngStream);
-    if (FAILED(hr)) return nullptr;
+    CHECK_HR_RETURN_NULL(hr);
 
     ComPtr<IWICBitmapEncoder> encoder;
     hr = wicFactory->CreateEncoder(GUID_ContainerFormatPng, nullptr, &encoder);
-    if (FAILED(hr)) return nullptr;
+    CHECK_HR_RETURN_NULL(hr);
 
     hr = encoder->Initialize(pngStream.Get(), WICBitmapEncoderNoCache);
-    if (FAILED(hr)) return nullptr;
+    CHECK_HR_RETURN_NULL(hr);
 
     ComPtr<IWICBitmapFrameEncode> frameEncode;
     hr = encoder->CreateNewFrame(&frameEncode, nullptr);
-    if (FAILED(hr)) return nullptr;
+    CHECK_HR_RETURN_NULL(hr);
 
     hr = frameEncode->Initialize(nullptr);
-    if (FAILED(hr)) return nullptr;
+    CHECK_HR_RETURN_NULL(hr);
 
     UINT width, height;
     bitmap->GetSize(&width, &height);
     hr = frameEncode->SetSize(width, height);
-    if (FAILED(hr)) return nullptr;
+    CHECK_HR_RETURN_NULL(hr);
 
-    WICPixelFormatGUID pixelFormat = GUID_WICPixelFormat32bppBGRA;
+    WICPixelFormatGUID pixelFormat = WIC_PIXEL_FORMAT_STRAIGHT_ALPHA;
     hr = frameEncode->SetPixelFormat(&pixelFormat);
-    if (FAILED(hr)) return nullptr;
+    CHECK_HR_RETURN_NULL(hr);
 
     hr = frameEncode->WriteSource(bitmap, nullptr);
-    if (FAILED(hr)) return nullptr;
+    CHECK_HR_RETURN_NULL(hr);
 
     hr = frameEncode->Commit();
-    if (FAILED(hr)) return nullptr;
+    CHECK_HR_RETURN_NULL(hr);
 
     hr = encoder->Commit();
-    if (FAILED(hr)) return nullptr;
+    CHECK_HR_RETURN_NULL(hr);
 
     // Get PNG data and copy to new HGLOBAL
     HGLOBAL hPng = nullptr;
@@ -968,17 +961,17 @@ bool App::SaveImageToFile(const std::wstring& filePath) {
 }
 
 void App::RotateCW() {
-    RotateAndSaveImage(90);
+    RotateAndSaveImage(Rotation::CW_90);
 }
 
 void App::RotateCCW() {
-    RotateAndSaveImage(270);
+    RotateAndSaveImage(Rotation::CW_270);
 }
 
 void App::RotateAndSaveImage(int rotationDelta) {
     if (!m_currentImage || m_currentImage->filePath.empty()) return;
 
-    m_rotation = (m_rotation + rotationDelta) % 360;
+    m_rotation = (m_rotation + rotationDelta) % Rotation::FULL_ROTATION;
     m_renderer->SetRotation(m_rotation);
     InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
 
@@ -1005,8 +998,8 @@ void App::RotateAndSaveImage(int rotationDelta) {
             try { fs::remove(tempPath); } catch (...) {}
         }
 
-        m_rotation = 0;
-        m_renderer->SetRotation(0);
+        m_rotation = Rotation::NONE;
+        m_renderer->SetRotation(Rotation::NONE);
         m_navigator->SetCurrentFile(savedFilePath);
         LoadCurrentImage();
     }
@@ -1056,7 +1049,7 @@ void App::UpdateRendererText() {
         cursorOverlay.text = m_editingText + L"|";
         cursorOverlay.x = m_editingTextX;
         cursorOverlay.y = m_editingTextY;
-        cursorOverlay.color = D2D1::ColorF(D2D1::ColorF::White);
+        cursorOverlay.color = Colors::WHITE;
         cursorOverlay.fontSize = DEFAULT_TEXT_FONT_SIZE / imageW;
         overlays.push_back(cursorOverlay);
     }
@@ -1127,12 +1120,7 @@ void App::EraseAtPoint(int x, int y) {
 }
 
 void App::PushUndoState() {
-    EditState state;
-    state.strokes = m_markupStrokes;
-    state.texts = m_textOverlays;
-    state.hasCrop = m_hasCrop;
-    state.appliedCrop = m_appliedCrop;
-    m_undoStack.push_back(state);
+    m_undoStack.push_back(SaveCurrentEditState());
 
     // Limit undo stack size
     if (m_undoStack.size() > MAX_UNDO_LEVELS) {
@@ -1150,10 +1138,7 @@ void App::Undo() {
     bool wasCropped = m_hasCrop;
     bool willBeCropped = state.hasCrop;
 
-    m_markupStrokes = state.strokes;
-    m_textOverlays = state.texts;
-    m_hasCrop = state.hasCrop;
-    m_appliedCrop = state.appliedCrop;
+    RestoreEditState(state);
 
     // If undoing a crop, reload the original image
     if (wasCropped && !willBeCropped && m_currentImage) {
@@ -1191,8 +1176,8 @@ void App::RestoreEditState(const EditState& state) {
 
 void App::ClearEditState(bool clearRotation) {
     if (clearRotation) {
-        m_rotation = 0;
-        m_renderer->SetRotation(0);
+        m_rotation = Rotation::NONE;
+        m_renderer->SetRotation(Rotation::NONE);
     }
     m_hasCrop = false;
     m_appliedCrop = {};
@@ -1308,7 +1293,7 @@ bool App::HandleTextEditingKey(UINT key) {
             text.x = m_editingTextX;
             text.y = m_editingTextY;
             text.text = m_editingText;
-            text.color = D2D1::ColorF(D2D1::ColorF::White);
+            text.color = Colors::WHITE;
             text.fontSize = DEFAULT_TEXT_FONT_SIZE / imageW;
             m_textOverlays.push_back(text);
         }
@@ -1577,7 +1562,7 @@ void App::HandleMarkupMouseDown(int x, int y) {
     PushUndoState();
     m_isDrawing = true;
     MarkupStroke stroke;
-    stroke.color = D2D1::ColorF(D2D1::ColorF::Red);
+    stroke.color = Colors::RED;
     stroke.width = MARKUP_STROKE_WIDTH_PIXELS / imageW;
     stroke.points.push_back(D2D1::Point2F(normX, normY));
     m_markupStrokes.push_back(stroke);
