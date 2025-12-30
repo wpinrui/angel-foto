@@ -15,6 +15,13 @@ App::~App() {
     s_instance = nullptr;
 }
 
+// Helper to convert string to lowercase
+static std::wstring ToLowerCase(const std::wstring& str) {
+    std::wstring result = str;
+    std::transform(result.begin(), result.end(), result.begin(), ::towlower);
+    return result;
+}
+
 // Helper to convert rotation degrees to WIC transform option
 static WICBitmapTransformOptions GetWICTransformForRotation(int rotation) {
     switch (rotation) {
@@ -791,8 +798,7 @@ void App::SaveImageAs() {
     dialog->SetFileTypes(ARRAYSIZE(SAVE_FILE_FILTERS), SAVE_FILE_FILTERS);
 
     // Set default filter based on original extension
-    std::wstring extLower = srcExt;
-    std::transform(extLower.begin(), extLower.end(), extLower.begin(), ::towlower);
+    std::wstring extLower = ToLowerCase(srcExt);
     UINT filterIndex = 1; // Default to PNG
     if (extLower == L".jpg" || extLower == L".jpeg") filterIndex = 2;
     else if (extLower == L".bmp") filterIndex = 3;
@@ -820,8 +826,7 @@ void App::SaveImageAs() {
 
 // Get container format GUID from file extension
 GUID App::GetContainerFormatForExtension(const std::wstring& ext) {
-    std::wstring extLower = ext;
-    std::transform(extLower.begin(), extLower.end(), extLower.begin(), ::towlower);
+    std::wstring extLower = ToLowerCase(ext);
 
     if (extLower == L".jpg" || extLower == L".jpeg") {
         return GUID_ContainerFormatJpeg;
@@ -1499,8 +1504,8 @@ void App::OnKeyDown(UINT key) {
         return;
     }
 
-    bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
-    bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+    bool ctrl = IsKeyPressed(VK_CONTROL);
+    bool shift = IsKeyPressed(VK_SHIFT);
 
     // Try each handler in order of priority
     if (HandleNavigationKey(key, ctrl, shift)) return;

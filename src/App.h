@@ -104,6 +104,9 @@ private:
     // Coordinate transformation helper
     bool ScreenToNormalizedImageCoords(int screenX, int screenY, float& normX, float& normY) const;
 
+    // Keyboard state helper
+    static bool IsKeyPressed(int vk) { return (GetKeyState(vk) & KEY_DOWN_BIT) != 0; }
+
     // Edit state management
     void ClearEditState(bool clearRotation = true);
     void PushUndoState();
@@ -171,6 +174,9 @@ private:
 
     // UI constants
     static constexpr wchar_t MIN_PRINTABLE_CHAR = 32;
+
+    // Keyboard state constants
+    static constexpr WORD KEY_DOWN_BIT = 0x8000;  // High bit indicates key is pressed
 
     // Dialog button IDs
     static constexpr int DIALOG_BUTTON_SAVE_COPY = 100;

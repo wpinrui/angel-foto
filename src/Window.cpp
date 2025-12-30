@@ -115,10 +115,9 @@ void Window::ApplyDarkMode() {
     DWORD useLightTheme = 1;
     DWORD dataSize = sizeof(DWORD);
 
-    if (RegOpenKeyExW(HKEY_CURRENT_USER,
-        L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, REGISTRY_THEME_PATH,
         0, KEY_READ, &hKey) == ERROR_SUCCESS) {
-        RegQueryValueExW(hKey, L"AppsUseLightTheme", nullptr, nullptr,
+        RegQueryValueExW(hKey, REGISTRY_LIGHT_THEME_KEY, nullptr, nullptr,
             (LPBYTE)&useLightTheme, &dataSize);
         RegCloseKey(hKey);
     }
