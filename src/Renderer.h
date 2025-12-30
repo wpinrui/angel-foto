@@ -3,7 +3,7 @@
 
 class Renderer {
 public:
-    Renderer();
+    Renderer() = default;
     ~Renderer();
 
     bool Initialize(HWND hwnd);
@@ -23,15 +23,53 @@ public:
     float GetPanX() const { return m_panX; }
     float GetPanY() const { return m_panY; }
 
+    // Rotation (0, 90, 180, 270)
+    void SetRotation(int degrees);
+    int GetRotation() const { return m_rotation; }
+
+    // Crop mode
+    void SetCropMode(bool enabled);
+    void SetCropRect(D2D1_RECT_F rect);
+    D2D1_RECT_F GetCropRectInImageCoords() const;
+
+    // Markup strokes
+    struct MarkupStroke {
+        std::vector<D2D1_POINT_2F> points;
+        D2D1_COLOR_F color;
+        float width;
+    };
+    void SetMarkupStrokes(const std::vector<MarkupStroke>& strokes);
+
+    // Text overlays
+    struct TextOverlay {
+        std::wstring text;
+        float x, y;  // Normalized 0-1 coords
+        D2D1_COLOR_F color;
+        float fontSize;  // Normalized
+    };
+    void SetTextOverlays(const std::vector<TextOverlay>& overlays);
+
+    // Get image rect in screen coordinates (for coordinate transforms)
+    D2D1_RECT_F GetScreenImageRect() const;
+
     // Get Direct2D factory (for creating bitmaps)
     ID2D1Factory1* GetFactory() const { return m_factory.Get(); }
     ID2D1DeviceContext* GetDeviceContext() const { return m_deviceContext.Get(); }
     IWICImagingFactory* GetWICFactory() const { return m_wicFactory.Get(); }
 
+    // Text rendering constants (public for shared use)
+    static constexpr wchar_t DEFAULT_FONT_NAME[] = L"Segoe UI";
+    static constexpr wchar_t DEFAULT_LOCALE[] = L"en-us";
+
 private:
     void CreateDeviceResources();
     void DiscardDeviceResources();
-    D2D1_RECT_F CalculateImageRect();
+    D2D1_RECT_F CalculateImageRect() const;
+
+    // Rendering sub-routines (extracted from Render for clarity)
+    void RenderMarkupStrokes(const D2D1_RECT_F& screenRect);
+    void RenderTextOverlays(const D2D1_RECT_F& screenRect);
+    void RenderCropOverlay();
 
     HWND m_hwnd = nullptr;
     int m_width = 0;
@@ -52,7 +90,38 @@ private:
     float m_zoom = 1.0f;
     float m_panX = 0.0f;
     float m_panY = 0.0f;
+    int m_rotation = 0;
+
+    // Crop mode
+    bool m_cropMode = false;
+    D2D1_RECT_F m_cropRect = { 0, 0, 0, 0 };
+    ComPtr<ID2D1SolidColorBrush> m_cropBrush;
+    ComPtr<ID2D1SolidColorBrush> m_cropDimBrush;
+
+    // Markup strokes
+    std::vector<MarkupStroke> m_markupStrokes;
+    ComPtr<ID2D1SolidColorBrush> m_markupBrush;
+
+    // Text overlays
+    std::vector<TextOverlay> m_textOverlays;
+    ComPtr<IDWriteFactory> m_dwriteFactory;
 
     // Background color (dark)
-    D2D1_COLOR_F m_backgroundColor = { 0.1f, 0.1f, 0.1f, 1.0f };
+    D2D1_COLOR_F m_backgroundColor = Colors::DARK_GRAY;
+
+    // Zoom limits
+    static constexpr float MIN_ZOOM = 0.1f;
+    static constexpr float MAX_ZOOM = 10.0f;
+
+    // Swap chain constants
+    static constexpr UINT SWAP_CHAIN_BUFFER_COUNT = 2;
+    static constexpr UINT MIN_DIMENSION = 1;
+
+    // Text rendering constants
+    static constexpr float TEXT_DRAW_MAX_WIDTH = 1000.0f;
+    static constexpr float TEXT_DRAW_MAX_HEIGHT = 200.0f;
+
+    // Crop overlay constants
+    static constexpr float CROP_DIM_OPACITY = 0.5f;
+    static constexpr float CROP_BORDER_WIDTH = 2.0f;
 };

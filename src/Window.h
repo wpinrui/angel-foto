@@ -13,6 +13,9 @@ public:
 
     void SetTitle(const std::wstring& title);
     void ToggleFullscreen();
+
+    // Get default window title (static for use by other classes)
+    static std::wstring GetDefaultTitle() { return WINDOW_TITLE; }
     bool IsFullscreen() const { return m_isFullscreen; }
 
     // Get client area size in pixels
@@ -28,10 +31,21 @@ private:
     void OnDpiChanged(UINT dpi, const RECT* newRect);
     void ApplyDarkMode();
 
+    // Window constants
+    static constexpr wchar_t WINDOW_CLASS_NAME[] = L"AngelFotoWindow";
+    static constexpr wchar_t WINDOW_TITLE[] = L"angel-foto";
+    static constexpr int INITIAL_WIDTH = 800;
+    static constexpr int INITIAL_HEIGHT = 600;
+    static constexpr float BASE_DPI = 96.0f;
+
+    // Registry constants for dark mode detection
+    static constexpr wchar_t REGISTRY_THEME_PATH[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize";
+    static constexpr wchar_t REGISTRY_LIGHT_THEME_KEY[] = L"AppsUseLightTheme";
+
     App* m_app;
     HWND m_hwnd = nullptr;
-    int m_width = 800;
-    int m_height = 600;
+    int m_width = INITIAL_WIDTH;
+    int m_height = INITIAL_HEIGHT;
     float m_dpiScale = 1.0f;
     bool m_isFullscreen = false;
     WINDOWPLACEMENT m_windowPlacement = { sizeof(WINDOWPLACEMENT) };

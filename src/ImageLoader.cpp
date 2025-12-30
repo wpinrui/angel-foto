@@ -6,8 +6,6 @@ const std::vector<std::wstring> ImageLoader::s_supportedExtensions = {
     L".webp", L".heic", L".heif", L".ico", L".jfif"
 };
 
-ImageLoader::ImageLoader() {}
-
 void ImageLoader::Initialize(ID2D1DeviceContext* deviceContext, IWICImagingFactory* wicFactory) {
     m_deviceContext = deviceContext;
     m_wicFactory = wicFactory;
@@ -15,10 +13,7 @@ void ImageLoader::Initialize(ID2D1DeviceContext* deviceContext, IWICImagingFacto
 
 bool ImageLoader::IsSupportedFormat(const std::wstring& filePath) {
     fs::path path(filePath);
-    std::wstring ext = path.extension().wstring();
-
-    // Convert to lowercase
-    std::transform(ext.begin(), ext.end(), ext.begin(), ::towlower);
+    std::wstring ext = ToLowerCase(path.extension().wstring());
 
     return std::find(s_supportedExtensions.begin(), s_supportedExtensions.end(), ext)
         != s_supportedExtensions.end();
@@ -30,8 +25,7 @@ std::shared_ptr<ImageData> ImageLoader::LoadImage(const std::wstring& filePath) 
     }
 
     fs::path path(filePath);
-    std::wstring ext = path.extension().wstring();
-    std::transform(ext.begin(), ext.end(), ext.begin(), ::towlower);
+    std::wstring ext = ToLowerCase(path.extension().wstring());
 
     // Check for animated GIF
     if (ext == L".gif") {
@@ -90,7 +84,7 @@ ComPtr<ID2D1Bitmap> ImageLoader::LoadBitmapFromFile(const std::wstring& filePath
 
     hr = converter->Initialize(
         frame.Get(),
-        GUID_WICPixelFormat32bppPBGRA,
+        WIC_PIXEL_FORMAT_PREMULTIPLIED,
         WICBitmapDitherTypeNone,
         nullptr,
         0.0f,
@@ -136,11 +130,11 @@ std::shared_ptr<ImageData> ImageLoader::LoadAnimatedGif(const std::wstring& file
         PROPVARIANT propValue;
         PropVariantInit(&propValue);
 
-        if (SUCCEEDED(globalMetadata->GetMetadataByName(L"/logscrdesc/Width", &propValue))) {
+        if (SUCCEEDED(globalMetadata->GetMetadataByName(GIF_METADATA_WIDTH, &propValue))) {
             canvasWidth = propValue.uiVal;
             PropVariantClear(&propValue);
         }
-        if (SUCCEEDED(globalMetadata->GetMetadataByName(L"/logscrdesc/Height", &propValue))) {
+        if (SUCCEEDED(globalMetadata->GetMetadataByName(GIF_METADATA_HEIGHT, &propValue))) {
             canvasHeight = propValue.uiVal;
             PropVariantClear(&propValue);
         }
@@ -150,7 +144,7 @@ std::shared_ptr<ImageData> ImageLoader::LoadAnimatedGif(const std::wstring& file
     ComPtr<IWICBitmap> canvas;
     if (canvasWidth > 0 && canvasHeight > 0) {
         m_wicFactory->CreateBitmap(canvasWidth, canvasHeight,
-            GUID_WICPixelFormat32bppPBGRA, WICBitmapCacheOnLoad, &canvas);
+            WIC_PIXEL_FORMAT_PREMULTIPLIED, WICBitmapCacheOnLoad, &canvas);
     }
 
     for (UINT i = 0; i < frameCount; ++i) {
@@ -159,14 +153,14 @@ std::shared_ptr<ImageData> ImageLoader::LoadAnimatedGif(const std::wstring& file
         if (FAILED(hr)) continue;
 
         // Get frame delay
-        UINT delay = 100; // Default 100ms
+        UINT delay = DEFAULT_FRAME_DELAY_MS;
         ComPtr<IWICMetadataQueryReader> frameMetadata;
         if (SUCCEEDED(frame->GetMetadataQueryReader(&frameMetadata))) {
             PROPVARIANT propValue;
             PropVariantInit(&propValue);
-            if (SUCCEEDED(frameMetadata->GetMetadataByName(L"/grctlext/Delay", &propValue))) {
-                delay = propValue.uiVal * 10; // Convert from centiseconds to milliseconds
-                if (delay < 20) delay = 100; // Minimum reasonable delay
+            if (SUCCEEDED(frameMetadata->GetMetadataByName(GIF_METADATA_DELAY, &propValue))) {
+                delay = propValue.uiVal * CENTISECONDS_TO_MS;
+                if (delay < MIN_FRAME_DELAY_MS) delay = DEFAULT_FRAME_DELAY_MS;
                 PropVariantClear(&propValue);
             }
         }
@@ -179,7 +173,7 @@ std::shared_ptr<ImageData> ImageLoader::LoadAnimatedGif(const std::wstring& file
 
         hr = converter->Initialize(
             frame.Get(),
-            GUID_WICPixelFormat32bppPBGRA,
+            WIC_PIXEL_FORMAT_PREMULTIPLIED,
             WICBitmapDitherTypeNone,
             nullptr,
             0.0f,

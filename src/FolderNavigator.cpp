@@ -2,8 +2,6 @@
 #include "FolderNavigator.h"
 #include "ImageLoader.h"
 
-FolderNavigator::FolderNavigator() {}
-
 void FolderNavigator::SetCurrentFile(const std::wstring& filePath) {
     fs::path path(filePath);
 
@@ -187,4 +185,10 @@ void FolderNavigator::Refresh() {
     if (m_currentIndex >= m_imageFiles.size() && !m_imageFiles.empty()) {
         m_currentIndex = m_imageFiles.size() - 1;
     }
+}
+
+void FolderNavigator::Clear() {
+    m_imageFiles.clear();
+    m_currentIndex = 0;
+    m_currentFolder.clear();
 }

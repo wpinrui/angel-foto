@@ -24,7 +24,7 @@ bool Window::Create(HINSTANCE hInstance, int nCmdShow) {
     wc.hInstance = hInstance;
     wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
     wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
-    wc.lpszClassName = L"AngelFotoWindow";
+    wc.lpszClassName = WINDOW_CLASS_NAME;
 
     if (!RegisterClassExW(&wc)) {
         return false;
@@ -34,17 +34,17 @@ bool Window::Create(HINSTANCE hInstance, int nCmdShow) {
     HDC hdc = GetDC(nullptr);
     int dpi = GetDeviceCaps(hdc, LOGPIXELSX);
     ReleaseDC(nullptr, hdc);
-    m_dpiScale = dpi / 96.0f;
+    m_dpiScale = dpi / BASE_DPI;
 
     // Calculate initial window size
-    int initialWidth = static_cast<int>(800 * m_dpiScale);
-    int initialHeight = static_cast<int>(600 * m_dpiScale);
+    int initialWidth = static_cast<int>(INITIAL_WIDTH * m_dpiScale);
+    int initialHeight = static_cast<int>(INITIAL_HEIGHT * m_dpiScale);
 
     // Create window
     m_hwnd = CreateWindowExW(
         0,
-        L"AngelFotoWindow",
-        L"angel-foto",
+        WINDOW_CLASS_NAME,
+        WINDOW_TITLE,
         WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT, CW_USEDEFAULT,
         initialWidth, initialHeight,
@@ -115,10 +115,9 @@ void Window::ApplyDarkMode() {
     DWORD useLightTheme = 1;
     DWORD dataSize = sizeof(DWORD);
 
-    if (RegOpenKeyExW(HKEY_CURRENT_USER,
-        L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, REGISTRY_THEME_PATH,
         0, KEY_READ, &hKey) == ERROR_SUCCESS) {
-        RegQueryValueExW(hKey, L"AppsUseLightTheme", nullptr, nullptr,
+        RegQueryValueExW(hKey, REGISTRY_LIGHT_THEME_KEY, nullptr, nullptr,
             (LPBYTE)&useLightTheme, &dataSize);
         RegCloseKey(hKey);
     }
@@ -165,6 +164,12 @@ LRESULT Window::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
     case WM_KEYUP:
         if (m_app) {
             m_app->OnKeyUp(static_cast<UINT>(wParam));
+        }
+        return 0;
+
+    case WM_CHAR:
+        if (m_app) {
+            m_app->OnChar(static_cast<wchar_t>(wParam));
         }
         return 0;
 
@@ -232,7 +237,7 @@ void Window::OnResize(int width, int height) {
 }
 
 void Window::OnDpiChanged(UINT dpi, const RECT* newRect) {
-    m_dpiScale = dpi / 96.0f;
+    m_dpiScale = dpi / BASE_DPI;
 
     SetWindowPos(m_hwnd, nullptr,
         newRect->left, newRect->top,

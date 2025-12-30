@@ -4,7 +4,18 @@
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
 
-Renderer::Renderer() {}
+// Helper to create render target bitmap properties (used by CreateDeviceResources and Resize)
+static D2D1_BITMAP_PROPERTIES1 CreateRenderTargetBitmapProperties() {
+    return D2D1::BitmapProperties1(
+        D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
+        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_IGNORE)
+    );
+}
+
+// Helper to clamp a value to bounds [0, max]
+static float ClampToBounds(float value, float maxValue) {
+    return std::max(0.0f, std::min(value, maxValue));
+}
 
 Renderer::~Renderer() {
     DiscardDeviceResources();
@@ -38,6 +49,11 @@ bool Renderer::Initialize(HWND hwnd) {
         options,
         m_factory.GetAddressOf()
     );
+    if (FAILED(hr)) return false;
+
+    // Create DWrite factory for text rendering
+    hr = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED,
+        __uuidof(IDWriteFactory), reinterpret_cast<IUnknown**>(m_dwriteFactory.GetAddressOf()));
     if (FAILED(hr)) return false;
 
     try {
@@ -123,14 +139,14 @@ void Renderer::CreateDeviceResources() {
 
     // Create swap chain
     DXGI_SWAP_CHAIN_DESC1 swapChainDesc = {};
-    swapChainDesc.Width = m_width > 0 ? m_width : 1;
-    swapChainDesc.Height = m_height > 0 ? m_height : 1;
+    swapChainDesc.Width = m_width > 0 ? m_width : MIN_DIMENSION;
+    swapChainDesc.Height = m_height > 0 ? m_height : MIN_DIMENSION;
     swapChainDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
     swapChainDesc.Stereo = FALSE;
     swapChainDesc.SampleDesc.Count = 1;
     swapChainDesc.SampleDesc.Quality = 0;
     swapChainDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-    swapChainDesc.BufferCount = 2;
+    swapChainDesc.BufferCount = SWAP_CHAIN_BUFFER_COUNT;
     swapChainDesc.Scaling = DXGI_SCALING_NONE;
     swapChainDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
     swapChainDesc.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
@@ -150,10 +166,7 @@ void Renderer::CreateDeviceResources() {
     hr = m_swapChain->GetBuffer(0, IID_PPV_ARGS(&dxgiSurface));
     THROW_IF_FAILED(hr);
 
-    D2D1_BITMAP_PROPERTIES1 bitmapProperties = D2D1::BitmapProperties1(
-        D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
-        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_IGNORE)
-    );
+    D2D1_BITMAP_PROPERTIES1 bitmapProperties = CreateRenderTargetBitmapProperties();
 
     hr = m_deviceContext->CreateBitmapFromDxgiSurface(
         dxgiSurface.Get(),
@@ -196,10 +209,7 @@ void Renderer::Resize(int width, int height) {
         hr = m_swapChain->GetBuffer(0, IID_PPV_ARGS(&dxgiSurface));
         THROW_IF_FAILED(hr);
 
-        D2D1_BITMAP_PROPERTIES1 bitmapProperties = D2D1::BitmapProperties1(
-            D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
-            D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_IGNORE)
-        );
+        D2D1_BITMAP_PROPERTIES1 bitmapProperties = CreateRenderTargetBitmapProperties();
 
         hr = m_deviceContext->CreateBitmapFromDxgiSurface(
             dxgiSurface.Get(),
@@ -222,7 +232,7 @@ void Renderer::ClearImage() {
 }
 
 void Renderer::SetZoom(float zoom) {
-    m_zoom = std::clamp(zoom, 0.1f, 10.0f);
+    m_zoom = std::clamp(zoom, MIN_ZOOM, MAX_ZOOM);
 }
 
 void Renderer::SetPan(float panX, float panY) {
@@ -241,7 +251,69 @@ void Renderer::ResetView() {
     m_panY = 0.0f;
 }
 
-D2D1_RECT_F Renderer::CalculateImageRect() {
+void Renderer::SetRotation(int degrees) {
+    m_rotation = degrees % Rotation::FULL_ROTATION;
+}
+
+void Renderer::SetCropMode(bool enabled) {
+    m_cropMode = enabled;
+    if (!enabled) {
+        m_cropRect = { 0, 0, 0, 0 };
+    }
+
+    // Create brushes for crop overlay if needed
+    if (enabled && !m_cropBrush && m_deviceContext) {
+        m_deviceContext->CreateSolidColorBrush(
+            D2D1::ColorF(D2D1::ColorF::White), &m_cropBrush);
+        m_deviceContext->CreateSolidColorBrush(
+            D2D1::ColorF(0, 0, 0, CROP_DIM_OPACITY), &m_cropDimBrush);
+    }
+}
+
+void Renderer::SetCropRect(D2D1_RECT_F rect) {
+    m_cropRect = rect;
+}
+
+void Renderer::SetMarkupStrokes(const std::vector<MarkupStroke>& strokes) {
+    m_markupStrokes = strokes;
+}
+
+void Renderer::SetTextOverlays(const std::vector<TextOverlay>& overlays) {
+    m_textOverlays = overlays;
+}
+
+D2D1_RECT_F Renderer::GetScreenImageRect() const {
+    return CalculateImageRect();
+}
+
+D2D1_RECT_F Renderer::GetCropRectInImageCoords() const {
+    if (!m_currentImage) return { 0, 0, 0, 0 };
+
+    // Get the image rect in screen coordinates
+    D2D1_RECT_F imageRect = CalculateImageRect();
+
+    // Convert screen crop rect to image coordinates
+    float scaleX = m_currentImage->GetSize().width / (imageRect.right - imageRect.left);
+    float scaleY = m_currentImage->GetSize().height / (imageRect.bottom - imageRect.top);
+
+    D2D1_RECT_F result;
+    result.left = (m_cropRect.left - imageRect.left) * scaleX;
+    result.top = (m_cropRect.top - imageRect.top) * scaleY;
+    result.right = (m_cropRect.right - imageRect.left) * scaleX;
+    result.bottom = (m_cropRect.bottom - imageRect.top) * scaleY;
+
+    // Clamp to image bounds
+    float imgWidth = m_currentImage->GetSize().width;
+    float imgHeight = m_currentImage->GetSize().height;
+    result.left = ClampToBounds(result.left, imgWidth);
+    result.top = ClampToBounds(result.top, imgHeight);
+    result.right = ClampToBounds(result.right, imgWidth);
+    result.bottom = ClampToBounds(result.bottom, imgHeight);
+
+    return result;
+}
+
+D2D1_RECT_F Renderer::CalculateImageRect() const {
     if (!m_currentImage) {
         return D2D1::RectF(0, 0, 0, 0);
     }
@@ -249,6 +321,11 @@ D2D1_RECT_F Renderer::CalculateImageRect() {
     auto imageSize = m_currentImage->GetSize();
     float imageWidth = imageSize.width;
     float imageHeight = imageSize.height;
+
+    // Swap dimensions for 90/270 degree rotations
+    if (m_rotation == Rotation::CW_90 || m_rotation == Rotation::CW_270) {
+        std::swap(imageWidth, imageHeight);
+    }
 
     // Calculate scale to fit image in window while preserving aspect ratio
     float scaleX = static_cast<float>(m_width) / imageWidth;
@@ -267,6 +344,79 @@ D2D1_RECT_F Renderer::CalculateImageRect() {
     return D2D1::RectF(x, y, x + scaledWidth, y + scaledHeight);
 }
 
+void Renderer::RenderMarkupStrokes(const D2D1_RECT_F& screenRect) {
+    float screenW = screenRect.right - screenRect.left;
+    float screenH = screenRect.bottom - screenRect.top;
+
+    for (const auto& stroke : m_markupStrokes) {
+        if (stroke.points.size() < 2) continue;
+
+        ComPtr<ID2D1SolidColorBrush> brush;
+        m_deviceContext->CreateSolidColorBrush(stroke.color, &brush);
+        if (!brush) continue;
+
+        float screenStrokeWidth = stroke.width * screenW;
+
+        for (size_t i = 1; i < stroke.points.size(); ++i) {
+            D2D1_POINT_2F p1 = {
+                screenRect.left + stroke.points[i - 1].x * screenW,
+                screenRect.top + stroke.points[i - 1].y * screenH
+            };
+            D2D1_POINT_2F p2 = {
+                screenRect.left + stroke.points[i].x * screenW,
+                screenRect.top + stroke.points[i].y * screenH
+            };
+            m_deviceContext->DrawLine(p1, p2, brush.Get(), screenStrokeWidth);
+        }
+    }
+}
+
+void Renderer::RenderTextOverlays(const D2D1_RECT_F& screenRect) {
+    if (!m_dwriteFactory) return;
+
+    float screenW = screenRect.right - screenRect.left;
+    float screenH = screenRect.bottom - screenRect.top;
+
+    for (const auto& text : m_textOverlays) {
+        ComPtr<IDWriteTextFormat> textFormat;
+        float screenFontSize = text.fontSize * screenW;
+        m_dwriteFactory->CreateTextFormat(DEFAULT_FONT_NAME, nullptr,
+            DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+            screenFontSize, DEFAULT_LOCALE, &textFormat);
+        if (!textFormat) continue;
+
+        ComPtr<ID2D1SolidColorBrush> brush;
+        m_deviceContext->CreateSolidColorBrush(text.color, &brush);
+        if (!brush) continue;
+
+        float screenX = screenRect.left + text.x * screenW;
+        float screenY = screenRect.top + text.y * screenH;
+        m_deviceContext->DrawText(text.text.c_str(), (UINT32)text.text.length(),
+            textFormat.Get(), D2D1::RectF(screenX, screenY, screenX + TEXT_DRAW_MAX_WIDTH, screenY + TEXT_DRAW_MAX_HEIGHT), brush.Get());
+    }
+}
+
+void Renderer::RenderCropOverlay() {
+    if (!m_cropMode || !m_cropBrush || !m_cropDimBrush) return;
+    if (m_cropRect.right <= m_cropRect.left || m_cropRect.bottom <= m_cropRect.top) return;
+
+    float width = static_cast<float>(m_width);
+    float height = static_cast<float>(m_height);
+
+    // Dim area outside crop rect (top, bottom, left, right regions)
+    m_deviceContext->FillRectangle(
+        D2D1::RectF(0, 0, width, m_cropRect.top), m_cropDimBrush.Get());
+    m_deviceContext->FillRectangle(
+        D2D1::RectF(0, m_cropRect.bottom, width, height), m_cropDimBrush.Get());
+    m_deviceContext->FillRectangle(
+        D2D1::RectF(0, m_cropRect.top, m_cropRect.left, m_cropRect.bottom), m_cropDimBrush.Get());
+    m_deviceContext->FillRectangle(
+        D2D1::RectF(m_cropRect.right, m_cropRect.top, width, m_cropRect.bottom), m_cropDimBrush.Get());
+
+    // Draw crop border
+    m_deviceContext->DrawRectangle(m_cropRect, m_cropBrush.Get(), CROP_BORDER_WIDTH);
+}
+
 void Renderer::Render() {
     if (!m_deviceContext || !m_targetBitmap) return;
 
@@ -276,6 +426,26 @@ void Renderer::Render() {
     if (m_currentImage) {
         D2D1_RECT_F destRect = CalculateImageRect();
 
+        // Apply rotation transform
+        if (m_rotation != Rotation::NONE) {
+            float centerX = (destRect.left + destRect.right) / 2.0f;
+            float centerY = (destRect.top + destRect.bottom) / 2.0f;
+            m_deviceContext->SetTransform(
+                D2D1::Matrix3x2F::Rotation(static_cast<float>(m_rotation),
+                    D2D1::Point2F(centerX, centerY))
+            );
+
+            // Adjust destRect for rotated image
+            if (m_rotation == Rotation::CW_90 || m_rotation == Rotation::CW_270) {
+                float w = destRect.right - destRect.left;
+                float h = destRect.bottom - destRect.top;
+                destRect = D2D1::RectF(
+                    centerX - h / 2, centerY - w / 2,
+                    centerX + h / 2, centerY + w / 2
+                );
+            }
+        }
+
         // Use high quality interpolation for better image quality
         m_deviceContext->DrawBitmap(
             m_currentImage.Get(),
@@ -283,6 +453,15 @@ void Renderer::Render() {
             1.0f,
             D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC
         );
+
+        // Reset transform
+        m_deviceContext->SetTransform(D2D1::Matrix3x2F::Identity());
+
+        // Render overlays using extracted helper methods
+        D2D1_RECT_F screenRect = CalculateImageRect();
+        RenderMarkupStrokes(screenRect);
+        RenderTextOverlays(screenRect);
+        RenderCropOverlay();
     }
 
     HRESULT hr = m_deviceContext->EndDraw();

@@ -3,7 +3,7 @@
 
 class FolderNavigator {
 public:
-    FolderNavigator();
+    FolderNavigator() = default;
     ~FolderNavigator() = default;
 
     // Set current file and scan folder for images
@@ -32,6 +32,9 @@ public:
 
     // Refresh file list (after external changes)
     void Refresh();
+
+    // Clear all files
+    void Clear();
 
 private:
     void ScanFolder(const std::wstring& folderPath);

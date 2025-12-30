@@ -16,7 +16,7 @@ struct ImageData {
 
 class ImageLoader {
 public:
-    ImageLoader();
+    ImageLoader() = default;
     ~ImageLoader() = default;
 
     void Initialize(ID2D1DeviceContext* deviceContext, IWICImagingFactory* wicFactory);
@@ -39,4 +39,14 @@ private:
     IWICImagingFactory* m_wicFactory = nullptr;
 
     static const std::vector<std::wstring> s_supportedExtensions;
+
+    // GIF animation constants
+    static constexpr UINT DEFAULT_FRAME_DELAY_MS = 100;
+    static constexpr UINT MIN_FRAME_DELAY_MS = 20;
+    static constexpr UINT CENTISECONDS_TO_MS = 10;
+
+    // GIF metadata query paths
+    static constexpr wchar_t GIF_METADATA_WIDTH[] = L"/logscrdesc/Width";
+    static constexpr wchar_t GIF_METADATA_HEIGHT[] = L"/logscrdesc/Height";
+    static constexpr wchar_t GIF_METADATA_DELAY[] = L"/grctlext/Delay";
 };
