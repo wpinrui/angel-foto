@@ -285,15 +285,13 @@ void CALLBACK App::GifTimerProc(HWND hwnd, UINT msg, UINT_PTR id, DWORD time) {
 // Phase 2 feature implementations
 
 void App::CopyToClipboard() {
-    if (!m_currentImage || !m_currentImage->bitmap) return;
+    if (!m_currentImage || m_currentImage->filePath.empty()) return;
 
     auto wicFactory = m_renderer->GetWICFactory();
     auto d2dFactory = m_renderer->GetFactory();
     if (!wicFactory || !d2dFactory) return;
 
-    bool hasOverlays = !m_markupStrokes.empty() || !m_textOverlays.empty();
-
-    // Load original image with WIC
+    // Load from file and apply any transformations
     ComPtr<IWICBitmapDecoder> decoder;
     HRESULT hr = wicFactory->CreateDecoderFromFilename(
         m_currentImage->filePath.c_str(), nullptr, GENERIC_READ,
@@ -304,18 +302,17 @@ void App::CopyToClipboard() {
     hr = decoder->GetFrame(0, &frameDecode);
     if (FAILED(hr)) return;
 
-    // Convert to 32bpp BGRA for clipboard
     ComPtr<IWICFormatConverter> converter;
     hr = wicFactory->CreateFormatConverter(&converter);
     if (FAILED(hr)) return;
 
-    hr = converter->Initialize(frameDecode.Get(), GUID_WICPixelFormat32bppBGRA,
+    hr = converter->Initialize(frameDecode.Get(), GUID_WICPixelFormat32bppPBGRA,
         WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom);
     if (FAILED(hr)) return;
 
     ComPtr<IWICBitmapSource> source = converter;
 
-    // Apply rotation if needed
+    // Apply rotation if needed (note: rotation auto-saves so m_rotation should be 0 after save)
     if (m_rotation != 0) {
         ComPtr<IWICBitmapFlipRotator> rotator;
         hr = wicFactory->CreateBitmapFlipRotator(&rotator);
@@ -328,7 +325,6 @@ void App::CopyToClipboard() {
 
         hr = rotator->Initialize(source.Get(), transform);
         if (FAILED(hr)) return;
-
         source = rotator;
     }
 
@@ -340,94 +336,82 @@ void App::CopyToClipboard() {
 
         hr = clipper->Initialize(source.Get(), &m_appliedCrop);
         if (FAILED(hr)) return;
-
         source = clipper;
     }
 
     // Get final dimensions
     UINT width, height;
-    source->GetSize(&width, &height);
+    hr = source->GetSize(&width, &height);
+    if (FAILED(hr) || width == 0 || height == 0) return;
 
-    // Copy to buffer
+    // Create WIC bitmap for rendering
+    ComPtr<IWICBitmap> wicBitmap;
+    hr = wicFactory->CreateBitmapFromSource(source.Get(), WICBitmapCacheOnLoad, &wicBitmap);
+    if (FAILED(hr)) return;
+
+    // Create a D2D render target for the WIC bitmap to draw markups
+    ComPtr<ID2D1RenderTarget> rt;
+    D2D1_RENDER_TARGET_PROPERTIES rtProps = D2D1::RenderTargetProperties(
+        D2D1_RENDER_TARGET_TYPE_DEFAULT,
+        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED)
+    );
+    hr = d2dFactory->CreateWicBitmapRenderTarget(wicBitmap.Get(), rtProps, &rt);
+    if (FAILED(hr)) return;
+
+    rt->BeginDraw();
+
+    // Draw markup strokes
+    float outW = static_cast<float>(width);
+    float outH = static_cast<float>(height);
+
+    for (const auto& stroke : m_markupStrokes) {
+        if (stroke.points.size() < 2) continue;
+        ComPtr<ID2D1SolidColorBrush> brush;
+        rt->CreateSolidColorBrush(stroke.color, &brush);
+        if (!brush) continue;
+
+        float strokeWidth = stroke.width * outW;
+        for (size_t i = 1; i < stroke.points.size(); ++i) {
+            D2D1_POINT_2F p1 = { stroke.points[i-1].x * outW, stroke.points[i-1].y * outH };
+            D2D1_POINT_2F p2 = { stroke.points[i].x * outW, stroke.points[i].y * outH };
+            rt->DrawLine(p1, p2, brush.Get(), strokeWidth);
+        }
+    }
+
+    // Draw text overlays
+    ComPtr<IDWriteFactory> dwriteFactory;
+    DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory),
+        reinterpret_cast<IUnknown**>(dwriteFactory.GetAddressOf()));
+
+    if (dwriteFactory) {
+        for (const auto& text : m_textOverlays) {
+            ComPtr<IDWriteTextFormat> textFormat;
+            float fontSize = text.fontSize * outW;
+            dwriteFactory->CreateTextFormat(L"Segoe UI", nullptr,
+                DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+                fontSize, L"en-us", &textFormat);
+            if (!textFormat) continue;
+
+            ComPtr<ID2D1SolidColorBrush> brush;
+            rt->CreateSolidColorBrush(text.color, &brush);
+            if (!brush) continue;
+
+            float x = text.x * outW;
+            float y = text.y * outH;
+            rt->DrawText(text.text.c_str(), (UINT32)text.text.length(),
+                textFormat.Get(), D2D1::RectF(x, y, x + 1000, y + 200), brush.Get());
+        }
+    }
+
+    hr = rt->EndDraw();
+    if (FAILED(hr)) return;
+
+    // Copy pixels from WIC bitmap
     UINT stride = width * 4;
     std::vector<BYTE> buffer(stride * height);
     WICRect rcCopy = { 0, 0, (INT)width, (INT)height };
-    hr = source->CopyPixels(&rcCopy, stride, (UINT)buffer.size(), buffer.data());
+    hr = wicBitmap->CopyPixels(&rcCopy, stride, (UINT)buffer.size(), buffer.data());
     if (FAILED(hr)) return;
-
-    // Draw overlays if needed
-    if (hasOverlays) {
-        ComPtr<IWICBitmap> wicBitmap;
-        hr = wicFactory->CreateBitmapFromMemory(width, height, GUID_WICPixelFormat32bppPBGRA,
-            stride, (UINT)buffer.size(), buffer.data(), &wicBitmap);
-        if (FAILED(hr)) return;
-
-        ComPtr<ID2D1RenderTarget> rt;
-        D2D1_RENDER_TARGET_PROPERTIES rtProps = D2D1::RenderTargetProperties(
-            D2D1_RENDER_TARGET_TYPE_DEFAULT,
-            D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED)
-        );
-        hr = d2dFactory->CreateWicBitmapRenderTarget(wicBitmap.Get(), rtProps, &rt);
-        if (FAILED(hr)) return;
-
-        rt->BeginDraw();
-
-        // Draw markup strokes
-        float outW = static_cast<float>(width);
-        float outH = static_cast<float>(height);
-
-        for (const auto& stroke : m_markupStrokes) {
-            if (stroke.points.size() < 2) continue;
-            ComPtr<ID2D1SolidColorBrush> brush;
-            rt->CreateSolidColorBrush(stroke.color, &brush);
-            if (!brush) continue;
-
-            float strokeWidth = stroke.width * outW;
-            for (size_t i = 1; i < stroke.points.size(); ++i) {
-                D2D1_POINT_2F p1 = { stroke.points[i-1].x * outW, stroke.points[i-1].y * outH };
-                D2D1_POINT_2F p2 = { stroke.points[i].x * outW, stroke.points[i].y * outH };
-                rt->DrawLine(p1, p2, brush.Get(), strokeWidth);
-            }
-        }
-
-        // Draw text overlays
-        ComPtr<IDWriteFactory> dwriteFactory;
-        DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory),
-            reinterpret_cast<IUnknown**>(dwriteFactory.GetAddressOf()));
-
-        if (dwriteFactory) {
-            for (const auto& text : m_textOverlays) {
-                ComPtr<IDWriteTextFormat> textFormat;
-                float fontSize = text.fontSize * outW;
-                dwriteFactory->CreateTextFormat(L"Segoe UI", nullptr,
-                    DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
-                    fontSize, L"en-us", &textFormat);
-                if (!textFormat) continue;
-
-                ComPtr<ID2D1SolidColorBrush> brush;
-                rt->CreateSolidColorBrush(text.color, &brush);
-                if (!brush) continue;
-
-                float x = text.x * outW;
-                float y = text.y * outH;
-                rt->DrawText(text.text.c_str(), (UINT32)text.text.length(),
-                    textFormat.Get(), D2D1::RectF(x, y, x + 1000, y + 200), brush.Get());
-            }
-        }
-
-        rt->EndDraw();
-
-        // Copy back from WIC bitmap
-        ComPtr<IWICBitmapLock> lock;
-        WICRect lockRect = { 0, 0, (INT)width, (INT)height };
-        hr = wicBitmap->Lock(&lockRect, WICBitmapLockRead, &lock);
-        if (SUCCEEDED(hr)) {
-            UINT bufSize;
-            BYTE* pData;
-            lock->GetDataPointer(&bufSize, &pData);
-            memcpy(buffer.data(), pData, buffer.size());
-        }
-    }
 
     // Create DIB for clipboard
     BITMAPINFOHEADER bi = {};
