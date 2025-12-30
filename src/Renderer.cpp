@@ -261,7 +261,7 @@ void Renderer::SetCropMode(bool enabled) {
         m_deviceContext->CreateSolidColorBrush(
             D2D1::ColorF(D2D1::ColorF::White), &m_cropBrush);
         m_deviceContext->CreateSolidColorBrush(
-            D2D1::ColorF(0, 0, 0, 0.5f), &m_cropDimBrush);
+            D2D1::ColorF(0, 0, 0, CROP_DIM_OPACITY), &m_cropDimBrush);
     }
 }
 
@@ -412,9 +412,9 @@ void Renderer::Render() {
             for (const auto& text : m_textOverlays) {
                 ComPtr<IDWriteTextFormat> textFormat;
                 float screenFontSize = text.fontSize * screenW;
-                m_dwriteFactory->CreateTextFormat(L"Segoe UI", nullptr,
+                m_dwriteFactory->CreateTextFormat(DEFAULT_FONT_NAME, nullptr,
                     DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
-                    screenFontSize, L"en-us", &textFormat);
+                    screenFontSize, DEFAULT_LOCALE, &textFormat);
                 if (!textFormat) continue;
 
                 ComPtr<ID2D1SolidColorBrush> brush;
@@ -450,7 +450,7 @@ void Renderer::Render() {
                     m_cropDimBrush.Get());
 
                 // Draw crop border
-                m_deviceContext->DrawRectangle(m_cropRect, m_cropBrush.Get(), 2.0f);
+                m_deviceContext->DrawRectangle(m_cropRect, m_cropBrush.Get(), CROP_BORDER_WIDTH);
             }
         }
     }

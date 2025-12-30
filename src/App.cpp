@@ -27,7 +27,7 @@ static WICBitmapTransformOptions GetWICTransformForRotation(int rotation) {
 
 // Helper to render markup strokes and text overlays to a D2D render target
 static void RenderMarkupAndTextToTarget(
-    ID2D1RenderTarget* rt,
+    ID2D1RenderTarget* renderTarget,
     float width, float height,
     const std::vector<App::MarkupStroke>& strokes,
     const std::vector<App::TextOverlay>& texts)
@@ -36,14 +36,14 @@ static void RenderMarkupAndTextToTarget(
     for (const auto& stroke : strokes) {
         if (stroke.points.size() < 2) continue;
         ComPtr<ID2D1SolidColorBrush> brush;
-        rt->CreateSolidColorBrush(stroke.color, &brush);
+        renderTarget->CreateSolidColorBrush(stroke.color, &brush);
         if (!brush) continue;
 
         float strokeWidth = stroke.width * width;
         for (size_t i = 1; i < stroke.points.size(); ++i) {
             D2D1_POINT_2F p1 = { stroke.points[i-1].x * width, stroke.points[i-1].y * height };
             D2D1_POINT_2F p2 = { stroke.points[i].x * width, stroke.points[i].y * height };
-            rt->DrawLine(p1, p2, brush.Get(), strokeWidth);
+            renderTarget->DrawLine(p1, p2, brush.Get(), strokeWidth);
         }
     }
 
@@ -56,18 +56,18 @@ static void RenderMarkupAndTextToTarget(
         for (const auto& text : texts) {
             ComPtr<IDWriteTextFormat> textFormat;
             float fontSize = text.fontSize * width;
-            dwriteFactory->CreateTextFormat(L"Segoe UI", nullptr,
+            dwriteFactory->CreateTextFormat(App::DEFAULT_FONT_NAME, nullptr,
                 DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
-                fontSize, L"en-us", &textFormat);
+                fontSize, App::DEFAULT_LOCALE, &textFormat);
             if (!textFormat) continue;
 
             ComPtr<ID2D1SolidColorBrush> brush;
-            rt->CreateSolidColorBrush(text.color, &brush);
+            renderTarget->CreateSolidColorBrush(text.color, &brush);
             if (!brush) continue;
 
             float x = text.x * width;
             float y = text.y * height;
-            rt->DrawText(text.text.c_str(), (UINT32)text.text.length(),
+            renderTarget->DrawText(text.text.c_str(), (UINT32)text.text.length(),
                 textFormat.Get(), D2D1::RectF(x, y, width, height), brush.Get());
         }
     }
@@ -397,18 +397,18 @@ void App::CopyToClipboard() {
     if (FAILED(hr)) return;
 
     // Create a D2D render target for the WIC bitmap to draw markups
-    ComPtr<ID2D1RenderTarget> rt;
-    D2D1_RENDER_TARGET_PROPERTIES rtProps = D2D1::RenderTargetProperties(
+    ComPtr<ID2D1RenderTarget> renderTarget;
+    D2D1_RENDER_TARGET_PROPERTIES renderTargetProps = D2D1::RenderTargetProperties(
         D2D1_RENDER_TARGET_TYPE_DEFAULT,
         D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED)
     );
-    hr = d2dFactory->CreateWicBitmapRenderTarget(wicBitmap.Get(), rtProps, &rt);
+    hr = d2dFactory->CreateWicBitmapRenderTarget(wicBitmap.Get(), renderTargetProps, &renderTarget);
     if (FAILED(hr)) return;
 
-    rt->BeginDraw();
-    RenderMarkupAndTextToTarget(rt.Get(), static_cast<float>(width), static_cast<float>(height),
+    renderTarget->BeginDraw();
+    RenderMarkupAndTextToTarget(renderTarget.Get(), static_cast<float>(width), static_cast<float>(height),
         m_markupStrokes, m_textOverlays);
-    hr = rt->EndDraw();
+    hr = renderTarget->EndDraw();
     if (FAILED(hr)) return;
 
     // Copy pixels from WIC bitmap for DIB format
@@ -570,11 +570,7 @@ void App::OpenFileDialog() {
         CLSCTX_ALL, IID_PPV_ARGS(&dialog));
     if (FAILED(hr)) return;
 
-    COMDLG_FILTERSPEC filters[] = {
-        { L"Image Files", L"*.jpg;*.jpeg;*.png;*.bmp;*.gif;*.tiff;*.tif;*.webp;*.heic;*.heif" },
-        { L"All Files", L"*.*" }
-    };
-    dialog->SetFileTypes(ARRAYSIZE(filters), filters);
+    dialog->SetFileTypes(ARRAYSIZE(OPEN_FILE_FILTERS), OPEN_FILE_FILTERS);
 
     hr = dialog->Show(m_window->GetHwnd());
     if (SUCCEEDED(hr)) {
@@ -641,9 +637,9 @@ void App::SaveImage() {
         config.pszContent = L"How would you like to save?";
 
         TASKDIALOG_BUTTON buttons[] = {
-            { 100, L"Save Copy\nOriginal file preserved" },
-            { 101, L"Overwrite\nReplace original file" },
-            { 102, L"Cancel\nDon't save" }
+            { DIALOG_BUTTON_SAVE_COPY, L"Save Copy\nOriginal file preserved" },
+            { DIALOG_BUTTON_OVERWRITE, L"Overwrite\nReplace original file" },
+            { DIALOG_BUTTON_CANCEL, L"Cancel\nDon't save" }
         };
         config.pButtons = buttons;
         config.cButtons = ARRAYSIZE(buttons);
@@ -651,8 +647,8 @@ void App::SaveImage() {
         int clicked = 0;
         if (FAILED(TaskDialogIndirect(&config, &clicked, nullptr, nullptr))) return;
 
-        if (clicked == 102) return;  // Cancel
-        saveCopy = (clicked == 100);
+        if (clicked == DIALOG_BUTTON_CANCEL) return;
+        saveCopy = (clicked == DIALOG_BUTTON_SAVE_COPY);
     }
 
     if (saveCopy) {
@@ -719,13 +715,7 @@ void App::SaveImageAs() {
     fs::path srcPath(m_currentImage->filePath);
     std::wstring srcExt = srcPath.extension().wstring();
 
-    COMDLG_FILTERSPEC filters[] = {
-        { L"PNG Image", L"*.png" },
-        { L"JPEG Image", L"*.jpg;*.jpeg" },
-        { L"BMP Image", L"*.bmp" },
-        { L"All Files", L"*.*" }
-    };
-    dialog->SetFileTypes(ARRAYSIZE(filters), filters);
+    dialog->SetFileTypes(ARRAYSIZE(SAVE_FILE_FILTERS), SAVE_FILE_FILTERS);
 
     // Set default filter based on original extension
     std::wstring extLower = srcExt;
@@ -851,18 +841,18 @@ bool App::SaveImageToFile(const std::wstring& filePath) {
 
     // Draw overlays if needed
     if (hasOverlays) {
-        ComPtr<ID2D1RenderTarget> rt;
-        D2D1_RENDER_TARGET_PROPERTIES rtProps = D2D1::RenderTargetProperties(
+        ComPtr<ID2D1RenderTarget> renderTarget;
+        D2D1_RENDER_TARGET_PROPERTIES renderTargetProps = D2D1::RenderTargetProperties(
             D2D1_RENDER_TARGET_TYPE_DEFAULT,
             D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED)
         );
-        hr = d2dFactory->CreateWicBitmapRenderTarget(wicBitmap.Get(), rtProps, &rt);
+        hr = d2dFactory->CreateWicBitmapRenderTarget(wicBitmap.Get(), renderTargetProps, &renderTarget);
         if (FAILED(hr)) return false;
 
-        rt->BeginDraw();
-        RenderMarkupAndTextToTarget(rt.Get(), static_cast<float>(width), static_cast<float>(height),
+        renderTarget->BeginDraw();
+        RenderMarkupAndTextToTarget(renderTarget.Get(), static_cast<float>(width), static_cast<float>(height),
             m_markupStrokes, m_textOverlays);
-        hr = rt->EndDraw();
+        hr = renderTarget->EndDraw();
         if (FAILED(hr)) return false;
     }
 
@@ -1227,16 +1217,16 @@ void App::ApplyCrop() {
     m_hasCrop = true;
     m_appliedCrop = { cropX, cropY, cropW, cropH };
 
-    auto dc = m_renderer->GetDeviceContext();
+    auto deviceContext = m_renderer->GetDeviceContext();
 
     // Create cropped bitmap for display
-    D2D1_BITMAP_PROPERTIES1 props = D2D1::BitmapProperties1(
+    D2D1_BITMAP_PROPERTIES1 bitmapProps = D2D1::BitmapProperties1(
         D2D1_BITMAP_OPTIONS_TARGET,
         D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED)
     );
 
     ComPtr<ID2D1Bitmap1> croppedBitmap;
-    HRESULT hr = dc->CreateBitmap(D2D1::SizeU(cropW, cropH), nullptr, 0, props, &croppedBitmap);
+    HRESULT hr = deviceContext->CreateBitmap(D2D1::SizeU(cropW, cropH), nullptr, 0, bitmapProps, &croppedBitmap);
     if (FAILED(hr)) return;
 
     D2D1_POINT_2U destPoint = {0, 0};
@@ -1255,27 +1245,62 @@ void App::ApplyCrop() {
     CancelCurrentMode();
 }
 
-void App::OnKeyDown(UINT key) {
-    // When editing text, only handle Escape, Enter, and Backspace
-    if (m_isEditingText) {
-        if (key != VK_ESCAPE && key != VK_RETURN && key != VK_BACK) {
-            return;  // Let OnChar handle printable characters
-        }
-    }
+bool App::HandleTextEditingKey(UINT key) {
+    if (!m_isEditingText) return false;
 
+    switch (key) {
+    case VK_ESCAPE:
+        m_isEditingText = false;
+        m_editingText.clear();
+        UpdateRendererText();
+        InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
+        return true;
+
+    case VK_RETURN:
+        if (!m_editingText.empty()) {
+            PushUndoState();
+            D2D1_RECT_F imageRect = m_renderer->GetScreenImageRect();
+            float imageW = imageRect.right - imageRect.left;
+
+            TextOverlay text;
+            text.x = m_editingTextX;
+            text.y = m_editingTextY;
+            text.text = m_editingText;
+            text.color = D2D1::ColorF(D2D1::ColorF::White);
+            text.fontSize = DEFAULT_TEXT_FONT_SIZE / imageW;
+            m_textOverlays.push_back(text);
+        }
+        m_isEditingText = false;
+        m_editingText.clear();
+        UpdateRendererText();
+        InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
+        return true;
+
+    case VK_BACK:
+        if (!m_editingText.empty()) {
+            m_editingText.pop_back();
+            UpdateRendererText();
+            InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
+        }
+        return true;
+
+    default:
+        return true;  // Block other keys during text editing
+    }
+}
+
+bool App::HandleNavigationKey(UINT key, bool ctrl, bool shift) {
+    (void)ctrl; (void)shift;
     DWORD now = GetTickCount();
-    bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
-    bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
 
     switch (key) {
     case VK_RIGHT:
-        // Handle key repeat for fast navigation
         if (!m_isNavigating || (now - m_lastNavigateTime) >= NAVIGATE_DELAY_MS) {
             NavigateNext();
             m_isNavigating = true;
             m_lastNavigateTime = now;
         }
-        break;
+        return true;
 
     case VK_LEFT:
         if (!m_isNavigating || (now - m_lastNavigateTime) >= NAVIGATE_DELAY_MS) {
@@ -1283,91 +1308,43 @@ void App::OnKeyDown(UINT key) {
             m_isNavigating = true;
             m_lastNavigateTime = now;
         }
-        break;
+        return true;
 
     case VK_HOME:
         NavigateFirst();
-        break;
+        return true;
 
     case VK_END:
         NavigateLast();
-        break;
+        return true;
 
     case VK_SPACE:
-        // Toggle GIF pause
         if (m_currentImage && m_currentImage->isAnimated) {
             m_gifPaused = !m_gifPaused;
             UpdateTitle();
         }
-        break;
-
-    case VK_F11:
-        ToggleFullscreen();
-        break;
+        return true;
 
     case VK_DELETE:
         DeleteCurrentFile();
-        break;
+        return true;
 
-    case VK_ESCAPE:
-        if (m_isEditingText) {
-            // Cancel text editing
-            m_isEditingText = false;
-            m_editingText.clear();
-            UpdateRendererText();
-            InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
-        } else if (m_editMode != EditMode::None) {
-            CancelCurrentMode();
-        } else if (m_window->IsFullscreen()) {
-            ToggleFullscreen();
-        } else {
-            PostQuitMessage(0);
-        }
-        break;
+    default:
+        return false;
+    }
+}
 
-    case VK_RETURN:
-        if (m_isEditingText) {
-            // Commit the text
-            if (!m_editingText.empty()) {
-                PushUndoState();
-                D2D1_RECT_F imageRect = m_renderer->GetScreenImageRect();
-                float imageW = imageRect.right - imageRect.left;
-
-                TextOverlay text;
-                text.x = m_editingTextX;
-                text.y = m_editingTextY;
-                text.text = m_editingText;
-                text.color = D2D1::ColorF(D2D1::ColorF::White);
-                text.fontSize = DEFAULT_TEXT_FONT_SIZE / imageW;
-                m_textOverlays.push_back(text);
-            }
-            m_isEditingText = false;
-            m_editingText.clear();
-            UpdateRendererText();
-            InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
-        } else if (m_editMode == EditMode::Crop) {
-            PushUndoState();
-            ApplyCrop();
-        }
-        break;
-
-    case VK_BACK:
-        if (m_isEditingText && !m_editingText.empty()) {
-            m_editingText.pop_back();
-            UpdateRendererText();
-            InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
-        }
-        break;
-
+bool App::HandleZoomKey(UINT key, bool ctrl) {
+    switch (key) {
     case VK_OEM_PLUS:
     case VK_ADD:
         ZoomIn();
-        break;
+        return true;
 
     case VK_OEM_MINUS:
     case VK_SUBTRACT:
         ZoomOut();
-        break;
+        return true;
 
     case 'F':
         if (ctrl) {
@@ -1375,39 +1352,66 @@ void App::OnKeyDown(UINT key) {
         } else {
             ResetZoom();
         }
-        break;
+        return true;
 
     case '1':
         m_renderer->SetZoom(1.0f / (m_currentImage ?
             std::min(static_cast<float>(m_window->GetWidth()) / m_currentImage->width,
                      static_cast<float>(m_window->GetHeight()) / m_currentImage->height) : 1.0f));
         InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
-        break;
+        return true;
 
-    // Phase 2 shortcuts
+    default:
+        return false;
+    }
+}
+
+bool App::HandleEditModeKey(UINT key, bool ctrl, bool shift) {
+    (void)shift;
+    switch (key) {
+    case VK_ESCAPE:
+        if (m_editMode != EditMode::None) {
+            CancelCurrentMode();
+            return true;
+        }
+        if (m_window->IsFullscreen()) {
+            ToggleFullscreen();
+            return true;
+        }
+        PostQuitMessage(0);
+        return true;
+
+    case VK_RETURN:
+        if (m_editMode == EditMode::Crop) {
+            PushUndoState();
+            ApplyCrop();
+            return true;
+        }
+        return false;
+
+    case VK_F11:
+        ToggleFullscreen();
+        return true;
+
     case 'C':
         if (ctrl) {
             CopyToClipboard();
         } else {
             ToggleEditMode(EditMode::Crop);
         }
-        break;
+        return true;
 
-    case 'B':
-        if (ctrl) SetAsWallpaper();
-        break;
+    case 'M':
+        ToggleEditMode(EditMode::Markup);
+        return true;
 
-    case 'O':
-        if (ctrl) OpenFileDialog();
-        break;
+    case 'T':
+        ToggleEditMode(EditMode::Text);
+        return true;
 
-    case 'S':
-        if (ctrl && shift) {
-            SaveImageAs();
-        } else if (ctrl) {
-            SaveImage();
-        }
-        break;
+    case 'E':
+        ToggleEditMode(EditMode::Erase);
+        return true;
 
     case 'R':
         if (shift) {
@@ -1415,39 +1419,83 @@ void App::OnKeyDown(UINT key) {
         } else {
             RotateCW();
         }
-        break;
-
-    case 'M':
-        ToggleEditMode(EditMode::Markup);
-        break;
-
-    case 'T':
-        ToggleEditMode(EditMode::Text);
-        break;
-
-    case 'E':
-        ToggleEditMode(EditMode::Erase);
-        break;
+        return true;
 
     case 'Z':
-        if (ctrl) Undo();
-        break;
+        if (ctrl) {
+            Undo();
+            return true;
+        }
+        return false;
+
+    default:
+        return false;
+    }
+}
+
+bool App::HandleFileOperationKey(UINT key, bool ctrl, bool shift) {
+    switch (key) {
+    case 'B':
+        if (ctrl) {
+            SetAsWallpaper();
+            return true;
+        }
+        return false;
+
+    case 'O':
+        if (ctrl) {
+            OpenFileDialog();
+            return true;
+        }
+        return false;
+
+    case 'S':
+        if (ctrl && shift) {
+            SaveImageAs();
+        } else if (ctrl) {
+            SaveImage();
+        } else {
+            return false;
+        }
+        return true;
 
     case 'Q':
-        if (ctrl) PostQuitMessage(0);
-        break;
+        if (ctrl) {
+            PostQuitMessage(0);
+            return true;
+        }
+        return false;
 
     case 'W':
         if (ctrl) {
-            // Close current image
             m_currentImage = nullptr;
             m_renderer->ClearImage();
             m_navigator->Clear();
             UpdateTitle();
             InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
+            return true;
         }
-        break;
+        return false;
+
+    default:
+        return false;
     }
+}
+
+void App::OnKeyDown(UINT key) {
+    // Text editing mode takes priority
+    if (m_isEditingText && HandleTextEditingKey(key)) {
+        return;
+    }
+
+    bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+    bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+
+    // Try each handler in order of priority
+    if (HandleNavigationKey(key, ctrl, shift)) return;
+    if (HandleZoomKey(key, ctrl)) return;
+    if (HandleEditModeKey(key, ctrl, shift)) return;
+    if (HandleFileOperationKey(key, ctrl, shift)) return;
 }
 
 void App::OnKeyUp(UINT key) {
@@ -1462,7 +1510,7 @@ void App::OnKeyUp(UINT key) {
 void App::OnChar(wchar_t ch) {
     if (m_isEditingText) {
         // Ignore control characters (handled by OnKeyDown)
-        if (ch >= 32) {  // Printable characters
+        if (ch >= MIN_PRINTABLE_CHAR) {
             m_editingText += ch;
             UpdateRendererText();
             InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);

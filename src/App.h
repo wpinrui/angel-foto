@@ -43,6 +43,10 @@ public:
         float fontSize;
     };
 
+    // Text rendering constants (public for helper function access)
+    static constexpr wchar_t DEFAULT_FONT_NAME[] = L"Segoe UI";
+    static constexpr wchar_t DEFAULT_LOCALE[] = L"en-us";
+
 private:
     // Edit modes (declared early for use in method signatures)
     enum class EditMode { None, Crop, Markup, Text, Erase };
@@ -96,6 +100,13 @@ private:
     void AdvanceGifFrame();
     static void CALLBACK GifTimerProc(HWND hwnd, UINT msg, UINT_PTR id, DWORD time);
 
+    // Keyboard handlers (extracted from OnKeyDown for clarity)
+    bool HandleTextEditingKey(UINT key);
+    bool HandleNavigationKey(UINT key, bool ctrl, bool shift);
+    bool HandleZoomKey(UINT key, bool ctrl);
+    bool HandleEditModeKey(UINT key, bool ctrl, bool shift);
+    bool HandleFileOperationKey(UINT key, bool ctrl, bool shift);
+
     std::unique_ptr<Window> m_window;
     std::unique_ptr<Renderer> m_renderer;
     std::unique_ptr<ImageLoader> m_imageLoader;
@@ -130,6 +141,26 @@ private:
     static constexpr float MARKUP_STROKE_WIDTH_PIXELS = 3.0f;
     static constexpr float TEXT_HIT_BOX_WIDTH = 0.2f;
     static constexpr float JPEG_SAVE_QUALITY = 0.9f;
+
+    // UI constants
+    static constexpr wchar_t MIN_PRINTABLE_CHAR = 32;
+
+    // Dialog button IDs
+    static constexpr int DIALOG_BUTTON_SAVE_COPY = 100;
+    static constexpr int DIALOG_BUTTON_OVERWRITE = 101;
+    static constexpr int DIALOG_BUTTON_CANCEL = 102;
+
+    // Dialog filter specifications
+    static inline const COMDLG_FILTERSPEC OPEN_FILE_FILTERS[] = {
+        { L"Image Files", L"*.jpg;*.jpeg;*.png;*.bmp;*.gif;*.tiff;*.tif;*.webp;*.heic;*.heif" },
+        { L"All Files", L"*.*" }
+    };
+    static inline const COMDLG_FILTERSPEC SAVE_FILE_FILTERS[] = {
+        { L"PNG Image", L"*.png" },
+        { L"JPEG Image", L"*.jpg;*.jpeg" },
+        { L"BMP Image", L"*.bmp" },
+        { L"All Files", L"*.*" }
+    };
 
     // Rotation state (0, 90, 180, 270 degrees)
     int m_rotation = 0;

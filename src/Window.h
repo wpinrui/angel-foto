@@ -28,10 +28,17 @@ private:
     void OnDpiChanged(UINT dpi, const RECT* newRect);
     void ApplyDarkMode();
 
+    // Window constants
+    static constexpr wchar_t WINDOW_CLASS_NAME[] = L"AngelFotoWindow";
+    static constexpr wchar_t WINDOW_TITLE[] = L"angel-foto";
+    static constexpr int INITIAL_WIDTH = 800;
+    static constexpr int INITIAL_HEIGHT = 600;
+    static constexpr float BASE_DPI = 96.0f;
+
     App* m_app;
     HWND m_hwnd = nullptr;
-    int m_width = 800;
-    int m_height = 600;
+    int m_width = INITIAL_WIDTH;
+    int m_height = INITIAL_HEIGHT;
     float m_dpiScale = 1.0f;
     bool m_isFullscreen = false;
     WINDOWPLACEMENT m_windowPlacement = { sizeof(WINDOWPLACEMENT) };

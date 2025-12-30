@@ -103,4 +103,10 @@ private:
     // Zoom limits
     static constexpr float MIN_ZOOM = 0.1f;
     static constexpr float MAX_ZOOM = 10.0f;
+
+    // Text rendering constants
+    static constexpr wchar_t DEFAULT_FONT_NAME[] = L"Segoe UI";
+    static constexpr wchar_t DEFAULT_LOCALE[] = L"en-us";
+    static constexpr float CROP_DIM_OPACITY = 0.5f;
+    static constexpr float CROP_BORDER_WIDTH = 2.0f;
 };
