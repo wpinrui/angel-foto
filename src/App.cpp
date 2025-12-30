@@ -15,6 +15,64 @@ App::~App() {
     s_instance = nullptr;
 }
 
+// Helper to convert rotation degrees to WIC transform option
+static WICBitmapTransformOptions GetWICTransformForRotation(int rotation) {
+    switch (rotation) {
+    case 90:  return WICBitmapTransformRotate90;
+    case 180: return WICBitmapTransformRotate180;
+    case 270: return WICBitmapTransformRotate270;
+    default:  return WICBitmapTransformRotate0;
+    }
+}
+
+// Helper to render markup strokes and text overlays to a D2D render target
+static void RenderMarkupAndTextToTarget(
+    ID2D1RenderTarget* rt,
+    float width, float height,
+    const std::vector<App::MarkupStroke>& strokes,
+    const std::vector<App::TextOverlay>& texts)
+{
+    // Draw markup strokes (normalized coords scaled to output size)
+    for (const auto& stroke : strokes) {
+        if (stroke.points.size() < 2) continue;
+        ComPtr<ID2D1SolidColorBrush> brush;
+        rt->CreateSolidColorBrush(stroke.color, &brush);
+        if (!brush) continue;
+
+        float strokeWidth = stroke.width * width;
+        for (size_t i = 1; i < stroke.points.size(); ++i) {
+            D2D1_POINT_2F p1 = { stroke.points[i-1].x * width, stroke.points[i-1].y * height };
+            D2D1_POINT_2F p2 = { stroke.points[i].x * width, stroke.points[i].y * height };
+            rt->DrawLine(p1, p2, brush.Get(), strokeWidth);
+        }
+    }
+
+    // Draw text overlays
+    ComPtr<IDWriteFactory> dwriteFactory;
+    DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory),
+        reinterpret_cast<IUnknown**>(dwriteFactory.GetAddressOf()));
+
+    if (dwriteFactory) {
+        for (const auto& text : texts) {
+            ComPtr<IDWriteTextFormat> textFormat;
+            float fontSize = text.fontSize * width;
+            dwriteFactory->CreateTextFormat(L"Segoe UI", nullptr,
+                DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+                fontSize, L"en-us", &textFormat);
+            if (!textFormat) continue;
+
+            ComPtr<ID2D1SolidColorBrush> brush;
+            rt->CreateSolidColorBrush(text.color, &brush);
+            if (!brush) continue;
+
+            float x = text.x * width;
+            float y = text.y * height;
+            rt->DrawText(text.text.c_str(), (UINT32)text.text.length(),
+                textFormat.Get(), D2D1::RectF(x, y, width, height), brush.Get());
+        }
+    }
+}
+
 bool App::Initialize(HINSTANCE hInstance, int nCmdShow, const std::wstring& initialFile) {
     // Initialize COM
     HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
@@ -236,7 +294,7 @@ void App::StartGifAnimation() {
     m_gifPaused = false;
     m_currentImage->currentFrame = 0;
 
-    UINT delay = m_currentImage->frameDelays.empty() ? 100 : m_currentImage->frameDelays[0];
+    UINT delay = m_currentImage->frameDelays.empty() ? DEFAULT_GIF_FRAME_DELAY_MS : m_currentImage->frameDelays[0];
     m_gifTimerId = SetTimer(m_window->GetHwnd(), 1, delay, GifTimerProc);
 }
 
@@ -266,7 +324,7 @@ void App::AdvanceGifFrame() {
     }
 
     // Schedule next frame
-    UINT delay = 100;
+    UINT delay = DEFAULT_GIF_FRAME_DELAY_MS;
     if (m_currentImage->currentFrame < m_currentImage->frameDelays.size()) {
         delay = m_currentImage->frameDelays[m_currentImage->currentFrame];
     }
@@ -318,12 +376,7 @@ void App::CopyToClipboard() {
         hr = wicFactory->CreateBitmapFlipRotator(&rotator);
         if (FAILED(hr)) return;
 
-        WICBitmapTransformOptions transform = WICBitmapTransformRotate0;
-        if (m_rotation == 90) transform = WICBitmapTransformRotate90;
-        else if (m_rotation == 180) transform = WICBitmapTransformRotate180;
-        else if (m_rotation == 270) transform = WICBitmapTransformRotate270;
-
-        hr = rotator->Initialize(source.Get(), transform);
+        hr = rotator->Initialize(source.Get(), GetWICTransformForRotation(m_rotation));
         if (FAILED(hr)) return;
         source = rotator;
     }
@@ -359,50 +412,8 @@ void App::CopyToClipboard() {
     if (FAILED(hr)) return;
 
     rt->BeginDraw();
-
-    // Draw markup strokes
-    float outW = static_cast<float>(width);
-    float outH = static_cast<float>(height);
-
-    for (const auto& stroke : m_markupStrokes) {
-        if (stroke.points.size() < 2) continue;
-        ComPtr<ID2D1SolidColorBrush> brush;
-        rt->CreateSolidColorBrush(stroke.color, &brush);
-        if (!brush) continue;
-
-        float strokeWidth = stroke.width * outW;
-        for (size_t i = 1; i < stroke.points.size(); ++i) {
-            D2D1_POINT_2F p1 = { stroke.points[i-1].x * outW, stroke.points[i-1].y * outH };
-            D2D1_POINT_2F p2 = { stroke.points[i].x * outW, stroke.points[i].y * outH };
-            rt->DrawLine(p1, p2, brush.Get(), strokeWidth);
-        }
-    }
-
-    // Draw text overlays
-    ComPtr<IDWriteFactory> dwriteFactory;
-    DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory),
-        reinterpret_cast<IUnknown**>(dwriteFactory.GetAddressOf()));
-
-    if (dwriteFactory) {
-        for (const auto& text : m_textOverlays) {
-            ComPtr<IDWriteTextFormat> textFormat;
-            float fontSize = text.fontSize * outW;
-            dwriteFactory->CreateTextFormat(L"Segoe UI", nullptr,
-                DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
-                fontSize, L"en-us", &textFormat);
-            if (!textFormat) continue;
-
-            ComPtr<ID2D1SolidColorBrush> brush;
-            rt->CreateSolidColorBrush(text.color, &brush);
-            if (!brush) continue;
-
-            float x = text.x * outW;
-            float y = text.y * outH;
-            rt->DrawText(text.text.c_str(), (UINT32)text.text.length(),
-                textFormat.Get(), D2D1::RectF(x, y, x + 1000, y + 200), brush.Get());
-        }
-    }
-
+    RenderMarkupAndTextToTarget(rt.Get(), static_cast<float>(width), static_cast<float>(height),
+        m_markupStrokes, m_textOverlays);
     hr = rt->EndDraw();
     if (FAILED(hr)) return;
 
@@ -817,12 +828,7 @@ bool App::SaveImageToFile(const std::wstring& filePath) {
         hr = wicFactory->CreateBitmapFlipRotator(&rotator);
         if (FAILED(hr)) return false;
 
-        WICBitmapTransformOptions transform = WICBitmapTransformRotate0;
-        if (m_rotation == 90) transform = WICBitmapTransformRotate90;
-        else if (m_rotation == 180) transform = WICBitmapTransformRotate180;
-        else if (m_rotation == 270) transform = WICBitmapTransformRotate270;
-
-        hr = rotator->Initialize(source.Get(), transform);
+        hr = rotator->Initialize(source.Get(), GetWICTransformForRotation(m_rotation));
         if (FAILED(hr)) return false;
 
         source = rotator;
@@ -859,7 +865,7 @@ bool App::SaveImageToFile(const std::wstring& filePath) {
         stride, (UINT)buffer.size(), buffer.data(), &wicBitmap);
     if (FAILED(hr)) return false;
 
-    // Draw overlays if needed (strokes are in normalized 0-1 coords)
+    // Draw overlays if needed
     if (hasOverlays) {
         ComPtr<ID2D1RenderTarget> rt;
         D2D1_RENDER_TARGET_PROPERTIES rtProps = D2D1::RenderTargetProperties(
@@ -870,56 +876,8 @@ bool App::SaveImageToFile(const std::wstring& filePath) {
         if (FAILED(hr)) return false;
 
         rt->BeginDraw();
-
-        // Draw markup strokes (normalized coords scaled to output size)
-        float outW = static_cast<float>(width);
-        float outH = static_cast<float>(height);
-
-        for (const auto& stroke : m_markupStrokes) {
-            if (stroke.points.size() < 2) continue;
-            ComPtr<ID2D1SolidColorBrush> brush;
-            rt->CreateSolidColorBrush(stroke.color, &brush);
-            if (!brush) continue;
-
-            // Stroke width is normalized, scale to output width
-            float strokeWidth = stroke.width * outW;
-
-            for (size_t i = 1; i < stroke.points.size(); ++i) {
-                // Scale normalized coords to output pixel coords
-                D2D1_POINT_2F p1 = {
-                    stroke.points[i - 1].x * outW,
-                    stroke.points[i - 1].y * outH
-                };
-                D2D1_POINT_2F p2 = {
-                    stroke.points[i].x * outW,
-                    stroke.points[i].y * outH
-                };
-                rt->DrawLine(p1, p2, brush.Get(), strokeWidth);
-            }
-        }
-
-        // Draw text overlays (normalized 0-1 coords scaled to output size)
-        ComPtr<IDWriteFactory> dwriteFactory;
-        DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED,
-            __uuidof(IDWriteFactory), reinterpret_cast<IUnknown**>(dwriteFactory.GetAddressOf()));
-        if (dwriteFactory) {
-            for (const auto& text : m_textOverlays) {
-                ComPtr<IDWriteTextFormat> textFormat;
-                float scaledFontSize = text.fontSize * outW;
-                dwriteFactory->CreateTextFormat(L"Segoe UI", nullptr,
-                    DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
-                    scaledFontSize, L"en-us", &textFormat);
-                if (!textFormat) continue;
-                ComPtr<ID2D1SolidColorBrush> brush;
-                rt->CreateSolidColorBrush(text.color, &brush);
-                if (!brush) continue;
-                float tx = text.x * outW;
-                float ty = text.y * outH;
-                rt->DrawText(text.text.c_str(), (UINT32)text.text.length(), textFormat.Get(),
-                    D2D1::RectF(tx, ty, outW, outH), brush.Get());
-            }
-        }
-
+        RenderMarkupAndTextToTarget(rt.Get(), static_cast<float>(width), static_cast<float>(height),
+            m_markupStrokes, m_textOverlays);
         hr = rt->EndDraw();
         if (FAILED(hr)) return false;
     }
@@ -1087,7 +1045,7 @@ void App::UpdateRendererText() {
         rt.x = m_editingTextX;
         rt.y = m_editingTextY;
         rt.color = D2D1::ColorF(D2D1::ColorF::White);
-        rt.fontSize = 24.0f / imageW;
+        rt.fontSize = DEFAULT_TEXT_FONT_SIZE / imageW;
         rendererTexts.push_back(rt);
     }
 
@@ -1113,7 +1071,7 @@ void App::EraseAtPoint(int x, int y) {
     D2D1_RECT_F imageRect = m_renderer->GetScreenImageRect();
     float imageW = imageRect.right - imageRect.left;
     float imageH = imageRect.bottom - imageRect.top;
-    float hitRadius = 30.0f / std::min(imageW, imageH);
+    float hitRadius = ERASE_HIT_RADIUS_PIXELS / std::min(imageW, imageH);
 
     bool erased = false;
 
@@ -1177,7 +1135,7 @@ void App::Undo() {
     m_undoStack.pop_back();
 
     // Check if we're undoing a crop (need to reload image)
-    bool wasCopped = m_hasCrop;
+    bool wasCropped = m_hasCrop;
     bool willBeCropped = state.hasCrop;
 
     m_markupStrokes = state.strokes;
@@ -1186,7 +1144,7 @@ void App::Undo() {
     m_appliedCrop = state.appliedCrop;
 
     // If undoing a crop, reload the original image
-    if (wasCopped && !willBeCropped && m_currentImage) {
+    if (wasCropped && !willBeCropped && m_currentImage) {
         std::wstring filePath = m_currentImage->filePath;
         m_currentImage = m_imageLoader->LoadImage(filePath);
         if (m_currentImage) {
@@ -1384,7 +1342,7 @@ void App::OnKeyDown(UINT key) {
                 text.y = m_editingTextY;
                 text.text = m_editingText;
                 text.color = D2D1::ColorF(D2D1::ColorF::White);
-                text.fontSize = 24.0f / imageW;
+                text.fontSize = DEFAULT_TEXT_FONT_SIZE / imageW;
                 m_textOverlays.push_back(text);
             }
             m_isEditingText = false;

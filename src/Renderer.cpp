@@ -277,7 +277,7 @@ void Renderer::SetTextOverlays(const std::vector<TextOverlay>& overlays) {
     m_textOverlays = overlays;
 }
 
-D2D1_RECT_F Renderer::GetScreenImageRect() {
+D2D1_RECT_F Renderer::GetScreenImageRect() const {
     return CalculateImageRect();
 }
 
@@ -285,7 +285,7 @@ D2D1_RECT_F Renderer::GetCropRectInImageCoords() const {
     if (!m_currentImage) return { 0, 0, 0, 0 };
 
     // Get the image rect in screen coordinates
-    D2D1_RECT_F imageRect = const_cast<Renderer*>(this)->CalculateImageRect();
+    D2D1_RECT_F imageRect = CalculateImageRect();
 
     // Convert screen crop rect to image coordinates
     float scaleX = m_currentImage->GetSize().width / (imageRect.right - imageRect.left);
@@ -306,7 +306,7 @@ D2D1_RECT_F Renderer::GetCropRectInImageCoords() const {
     return result;
 }
 
-D2D1_RECT_F Renderer::CalculateImageRect() {
+D2D1_RECT_F Renderer::CalculateImageRect() const {
     if (!m_currentImage) {
         return D2D1::RectF(0, 0, 0, 0);
     }

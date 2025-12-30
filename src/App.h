@@ -28,6 +28,21 @@ public:
     // File operations
     void OpenFile(const std::wstring& filePath);
 
+    // Markup drawing (public for helper function access)
+    struct MarkupStroke {
+        std::vector<D2D1_POINT_2F> points;
+        D2D1_COLOR_F color;
+        float width;
+    };
+
+    // Text overlay (public for helper function access)
+    struct TextOverlay {
+        std::wstring text;
+        float x, y;
+        D2D1_COLOR_F color;
+        float fontSize;
+    };
+
 private:
     // Edit modes (declared early for use in method signatures)
     enum class EditMode { None, Crop, Markup, Text, Erase };
@@ -104,7 +119,12 @@ private:
     // Navigation key repeat handling
     bool m_isNavigating = false;
     DWORD m_lastNavigateTime = 0;
-    static const DWORD NAVIGATE_DELAY_MS = 50; // Fast navigation when holding key
+    static const DWORD NAVIGATE_DELAY_MS = 50;  // Fast navigation when holding key
+
+    // Rendering constants
+    static constexpr UINT DEFAULT_GIF_FRAME_DELAY_MS = 100;
+    static constexpr float DEFAULT_TEXT_FONT_SIZE = 24.0f;
+    static constexpr float ERASE_HIT_RADIUS_PIXELS = 30.0f;
 
     // Rotation state (0, 90, 180, 270 degrees)
     int m_rotation = 0;
@@ -124,22 +144,11 @@ private:
     WICRect m_appliedCrop = {};
 
     // Markup drawing
-    struct MarkupStroke {
-        std::vector<D2D1_POINT_2F> points;
-        D2D1_COLOR_F color;
-        float width;
-    };
     std::vector<MarkupStroke> m_markupStrokes;
     bool m_isDrawing = false;
     bool m_isErasing = false;
 
-    // Text overlay
-    struct TextOverlay {
-        std::wstring text;
-        float x, y;
-        D2D1_COLOR_F color;
-        float fontSize;
-    };
+    // Text overlays
     std::vector<TextOverlay> m_textOverlays;
 
     // Text editing state

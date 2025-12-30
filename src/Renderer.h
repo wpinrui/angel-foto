@@ -50,7 +50,7 @@ public:
     void SetTextOverlays(const std::vector<TextOverlay>& overlays);
 
     // Get image rect in screen coordinates (for coordinate transforms)
-    D2D1_RECT_F GetScreenImageRect();
+    D2D1_RECT_F GetScreenImageRect() const;
 
     // Get Direct2D factory (for creating bitmaps)
     ID2D1Factory1* GetFactory() const { return m_factory.Get(); }
@@ -60,7 +60,7 @@ public:
 private:
     void CreateDeviceResources();
     void DiscardDeviceResources();
-    D2D1_RECT_F CalculateImageRect();
+    D2D1_RECT_F CalculateImageRect() const;
 
     HWND m_hwnd = nullptr;
     int m_width = 0;
