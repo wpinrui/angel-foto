@@ -117,6 +117,9 @@ private:
     // Keyboard state helper
     static bool IsKeyPressed(int vk) { return (GetKeyState(vk) & KEY_DOWN_BIT) != 0; }
 
+    // Window invalidation helper (DRY for repeated InvalidateRect calls)
+    void Invalidate();
+
     // Edit state management
     void ClearEditState(bool clearRotation = true);
     void PushUndoState();
@@ -191,6 +194,8 @@ private:
     // File naming constants
     static constexpr wchar_t WALLPAPER_TEMP_PREFIX[] = L"angel_foto_wallpaper";
     static constexpr wchar_t PNG_CLIPBOARD_FORMAT[] = L"PNG";
+    static constexpr wchar_t EDITED_FILE_SUFFIX[] = L"_edited";
+    static constexpr wchar_t TEMP_FILE_PREFIX[] = L"~temp_";
     static constexpr int EDITED_FILE_COUNTER_START = 2;
 
     // UI constants

@@ -450,7 +450,7 @@ void App::LoadCurrentImage() {
         m_currentImage = nullptr;
         m_renderer->ClearImage();
         UpdateTitle();
-        InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
+        Invalidate();
         return;
     }
 
@@ -476,7 +476,7 @@ void App::LoadCurrentImage() {
     }
 
     UpdateTitle();
-    InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
+    Invalidate();
 }
 
 void App::UpdateTitle() {
@@ -566,18 +566,18 @@ void App::DeleteCurrentFile() {
 void App::ZoomIn() {
     float zoom = m_renderer->GetZoom();
     m_renderer->SetZoom(zoom * ZOOM_FACTOR);
-    InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
+    Invalidate();
 }
 
 void App::ZoomOut() {
     float zoom = m_renderer->GetZoom();
     m_renderer->SetZoom(zoom / ZOOM_FACTOR);
-    InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
+    Invalidate();
 }
 
 void App::ResetZoom() {
     m_renderer->ResetView();
-    InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
+    Invalidate();
 }
 
 float App::CalculateActualSizeZoom() const {
@@ -625,7 +625,7 @@ void App::AdvanceGifFrame() {
     if (m_currentImage->currentFrame < m_currentImage->frames.size()) {
         m_currentImage->bitmap = m_currentImage->frames[m_currentImage->currentFrame];
         m_renderer->SetImage(m_currentImage->bitmap);
-        InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
+        Invalidate();
     }
 
     // Schedule next frame
@@ -809,13 +809,13 @@ bool App::PromptSaveEditedImageDialog(bool& saveCopy) {
 void App::SaveImageAsCopy(const fs::path& origPath) {
     // Generate copy filename: image.jpg -> image_edited.jpg
     fs::path copyPath = origPath.parent_path() /
-        (origPath.stem().wstring() + L"_edited" + origPath.extension().wstring());
+        (origPath.stem().wstring() + EDITED_FILE_SUFFIX + origPath.extension().wstring());
 
     // If file exists, add number: image_edited_2.jpg
     int counter = EDITED_FILE_COUNTER_START;
     while (fs::exists(copyPath)) {
         copyPath = origPath.parent_path() /
-            (origPath.stem().wstring() + L"_edited_" + std::to_wstring(counter++) + origPath.extension().wstring());
+            (origPath.stem().wstring() + EDITED_FILE_SUFFIX + L"_" + std::to_wstring(counter++) + origPath.extension().wstring());
     }
 
     if (!SaveImageToFile(copyPath.wstring())) return;
@@ -824,7 +824,7 @@ void App::SaveImageAsCopy(const fs::path& origPath) {
     ClearEditState(false);
     UpdateRendererMarkup();
     UpdateRendererText();
-    InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
+    Invalidate();
 
     FlashWindow(m_window->GetHwnd(), TRUE);
 }
@@ -939,7 +939,7 @@ UINT App::GetSaveFilterIndexForExtension(const std::wstring& ext) {
 // Generate temp file path for save operations
 std::wstring App::GenerateTempPath(const std::wstring& originalPath) {
     fs::path origPath(originalPath);
-    return (origPath.parent_path() / (L"~temp_" + origPath.filename().wstring())).wstring();
+    return (origPath.parent_path() / (TEMP_FILE_PREFIX + origPath.filename().wstring())).wstring();
 }
 
 // Encode WIC bitmap and save to file
@@ -1031,7 +1031,7 @@ void App::RotateAndSaveImage(int rotationDelta) {
 
     m_rotation = (m_rotation + rotationDelta) % Rotation::FULL_ROTATION;
     m_renderer->SetRotation(m_rotation);
-    InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
+    Invalidate();
 
     fs::path origPath(m_currentImage->filePath);
     std::wstring tempPath = GenerateTempPath(m_currentImage->filePath);
@@ -1078,7 +1078,7 @@ void App::ToggleEditMode(EditMode mode) {
     }
 
     UpdateTitle();
-    InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
+    Invalidate();
 }
 
 void App::CancelCurrentMode() {
@@ -1087,7 +1087,7 @@ void App::CancelCurrentMode() {
     m_renderer->SetCropMode(false);
     m_renderer->SetCropRect(D2D1::RectF(0, 0, 0, 0));
     UpdateTitle();
-    InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
+    Invalidate();
 }
 
 void App::UpdateRendererMarkup() {
@@ -1182,7 +1182,7 @@ void App::EraseAtPoint(int x, int y) {
     if (erased) {
         UpdateRendererMarkup();
         UpdateRendererText();
-        InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
+        Invalidate();
     }
 }
 
@@ -1218,7 +1218,7 @@ void App::Undo() {
 
     UpdateRendererMarkup();
     UpdateRendererText();
-    InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
+    Invalidate();
 }
 
 bool App::HasPendingEdits() const {
@@ -1251,6 +1251,10 @@ void App::ClearEditState(bool clearRotation) {
     m_markupStrokes.clear();
     m_textOverlays.clear();
     m_undoStack.clear();
+}
+
+void App::Invalidate() {
+    InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
 }
 
 void App::ApplyCrop() {
@@ -1318,7 +1322,7 @@ bool App::HandleTextEditingKey(UINT key) {
         m_isEditingText = false;
         m_editingText.clear();
         UpdateRendererText();
-        InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
+        Invalidate();
         return true;
 
     case VK_RETURN:
@@ -1338,14 +1342,14 @@ bool App::HandleTextEditingKey(UINT key) {
         m_isEditingText = false;
         m_editingText.clear();
         UpdateRendererText();
-        InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
+        Invalidate();
         return true;
 
     case VK_BACK:
         if (!m_editingText.empty()) {
             m_editingText.pop_back();
             UpdateRendererText();
-            InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
+            Invalidate();
         }
         return true;
 
@@ -1410,7 +1414,7 @@ bool App::HandleZoomKey(UINT key, bool ctrl) {
 
     case '1':
         m_renderer->SetZoom(CalculateActualSizeZoom());
-        InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
+        Invalidate();
         return true;
 
     default:
@@ -1524,7 +1528,7 @@ bool App::HandleFileOperationKey(UINT key, bool ctrl, bool shift) {
             m_renderer->ClearImage();
             m_navigator->Clear();
             UpdateTitle();
-            InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
+            Invalidate();
             return true;
         }
         return false;
@@ -1565,7 +1569,7 @@ void App::OnChar(wchar_t ch) {
         if (ch >= MIN_PRINTABLE_CHAR) {
             m_editingText += ch;
             UpdateRendererText();
-            InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
+            Invalidate();
         }
     }
 }
@@ -1615,7 +1619,7 @@ void App::HandleTextMouseDown(int x, int y) {
     m_editingTextX = normX;
     m_editingTextY = normY;
     UpdateRendererText();
-    InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
+    Invalidate();
 }
 
 void App::HandleEraseMouseDown(int x, int y) {
@@ -1668,7 +1672,7 @@ void App::HandleCropMouseMove(int x, int y) {
     float right = static_cast<float>(std::max(m_cropStartX, m_cropEndX));
     float bottom = static_cast<float>(std::max(m_cropStartY, m_cropEndY));
     m_renderer->SetCropRect(D2D1::RectF(left, top, right, bottom));
-    InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
+    Invalidate();
 }
 
 void App::HandleMarkupMouseMove(int x, int y) {
@@ -1679,7 +1683,7 @@ void App::HandleMarkupMouseMove(int x, int y) {
 
     m_markupStrokes.back().points.push_back(D2D1::Point2F(normX, normY));
     UpdateRendererMarkup();
-    InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
+    Invalidate();
 }
 
 void App::HandleEraseMouseMove(int x, int y) {
@@ -1692,7 +1696,7 @@ void App::HandlePanMouseMove(int x, int y) {
     m_renderer->AddPan(dx, dy);
     m_lastMouseX = x;
     m_lastMouseY = y;
-    InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
+    Invalidate();
 }
 
 void App::OnMouseMove(int x, int y) {
@@ -1710,7 +1714,7 @@ void App::OnMouseMove(int x, int y) {
 void App::OnResize(int width, int height) {
     if (m_renderer) {
         m_renderer->Resize(width, height);
-        InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
+        Invalidate();
     }
 }
 
