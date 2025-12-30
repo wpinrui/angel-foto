@@ -41,11 +41,16 @@ A fast, minimal photo viewer for Windows. Built to fix the pain points of the de
 ### Edit
 | Key | Action |
 |-----|--------|
-| Ctrl+C | Copy image |
+| Ctrl+C | Copy image to clipboard |
 | Ctrl+B | Set as wallpaper |
+| R | Rotate 90° clockwise |
+| Shift+R | Rotate 90° counter-clockwise |
+| C | Crop mode (Enter to apply) |
 | M | Markup (draw) mode |
-| T | Text markup mode |
-| Esc | Exit markup mode / Close |
+| T | Text overlay mode |
+| E | Erase mode (remove markup/text) |
+| Ctrl+Z | Undo |
+| Esc | Exit edit mode / Close |
 
 ## Building
 
