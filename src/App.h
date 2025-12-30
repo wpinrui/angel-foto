@@ -57,6 +57,8 @@ private:
     void UpdateTitle();
     void NavigateNext();
     void NavigatePrevious();
+    void PrefetchAdjacentImages();
+    bool TryNavigateWithDelay(std::function<bool()> navigateFn);
     void NavigateFirst();
     void NavigateLast();
     void ToggleFullscreen();
@@ -97,6 +99,7 @@ private:
     // File encoding helpers
     static GUID GetContainerFormatForExtension(const std::wstring& ext);
     static UINT GetSaveFilterIndexForExtension(const std::wstring& ext);
+    static std::wstring GenerateTempPath(const std::wstring& originalPath);
     bool EncodeAndSaveToFile(IWICImagingFactory* wicFactory, IWICBitmap* bitmap,
                              const std::wstring& filePath, GUID containerFormat);
 
@@ -168,6 +171,9 @@ private:
     bool m_isNavigating = false;
     DWORD m_lastNavigateTime = 0;
     static const DWORD NAVIGATE_DELAY_MS = 50;  // Fast navigation when holding key
+
+    // Image prefetch settings
+    static constexpr int PREFETCH_ADJACENT_COUNT = 3;
 
     // GIF animation constants
     static constexpr UINT_PTR GIF_TIMER_ID = 1;

@@ -372,10 +372,7 @@ void App::OpenFile(const std::wstring& filePath) {
 
     m_navigator->SetCurrentFile(filePath);
     LoadCurrentImage();
-
-    // Prefetch adjacent images
-    auto adjacent = m_navigator->GetAdjacentFiles(3);
-    m_imageCache->Prefetch(adjacent);
+    PrefetchAdjacentImages();
 }
 
 void App::LoadCurrentImage() {
@@ -463,21 +460,30 @@ void App::UpdateTitle() {
 void App::NavigateNext() {
     if (m_navigator->GoToNext()) {
         LoadCurrentImage();
-
-        // Prefetch next images
-        auto adjacent = m_navigator->GetAdjacentFiles(3);
-        m_imageCache->Prefetch(adjacent);
+        PrefetchAdjacentImages();
     }
 }
 
 void App::NavigatePrevious() {
     if (m_navigator->GoToPrevious()) {
         LoadCurrentImage();
-
-        // Prefetch adjacent images
-        auto adjacent = m_navigator->GetAdjacentFiles(3);
-        m_imageCache->Prefetch(adjacent);
+        PrefetchAdjacentImages();
     }
+}
+
+void App::PrefetchAdjacentImages() {
+    auto adjacent = m_navigator->GetAdjacentFiles(PREFETCH_ADJACENT_COUNT);
+    m_imageCache->Prefetch(adjacent);
+}
+
+bool App::TryNavigateWithDelay(std::function<bool()> navigateFn) {
+    DWORD now = GetTickCount();
+    if (!m_isNavigating || (now - m_lastNavigateTime) >= NAVIGATE_DELAY_MS) {
+        navigateFn();
+        m_isNavigating = true;
+        m_lastNavigateTime = now;
+    }
+    return true;
 }
 
 void App::NavigateFirst() {
@@ -764,10 +770,10 @@ void App::SaveImage() {
         FlashWindow(m_window->GetHwnd(), TRUE);
     } else {
         // Overwrite original
-        fs::path tempPath = origPath.parent_path() / (L"~temp_" + origPath.filename().wstring());
+        std::wstring tempPath = GenerateTempPath(m_currentImage->filePath);
 
         // Save to temp file
-        if (!SaveImageToFile(tempPath.wstring())) return;
+        if (!SaveImageToFile(tempPath)) return;
 
         // Release current image so original file isn't locked
         m_currentImage->bitmap.Reset();
@@ -851,6 +857,12 @@ UINT App::GetSaveFilterIndexForExtension(const std::wstring& ext) {
         return SAVE_FILTER_BMP_INDEX;
     }
     return SAVE_FILTER_PNG_INDEX;
+}
+
+// Generate temp file path for save operations
+std::wstring App::GenerateTempPath(const std::wstring& originalPath) {
+    fs::path origPath(originalPath);
+    return (origPath.parent_path() / (L"~temp_" + origPath.filename().wstring())).wstring();
 }
 
 // Encode WIC bitmap and save to file
@@ -945,17 +957,17 @@ void App::RotateAndSaveImage(int rotationDelta) {
     InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
 
     fs::path origPath(m_currentImage->filePath);
-    fs::path tempPath = origPath.parent_path() / (L"~temp_" + origPath.filename().wstring());
+    std::wstring tempPath = GenerateTempPath(m_currentImage->filePath);
     std::wstring savedFilePath = m_currentImage->filePath;
 
     // Save current edit state (rotation saves without markups)
-    EditState savedState = SaveCurrentEditState();
+    EditState preRotationState = SaveCurrentEditState();
     m_markupStrokes.clear();
     m_textOverlays.clear();
     m_hasCrop = false;
     m_appliedCrop = {};
 
-    if (SaveImageToFile(tempPath.wstring())) {
+    if (SaveImageToFile(tempPath)) {
         m_currentImage->bitmap.Reset();
         m_currentImage = nullptr;
         m_renderer->ClearImage();
@@ -974,7 +986,7 @@ void App::RotateAndSaveImage(int rotationDelta) {
     }
 
     // Restore edit state
-    RestoreEditState(savedState);
+    RestoreEditState(preRotationState);
     UpdateRendererMarkup();
     UpdateRendererText();
 }
@@ -1307,24 +1319,13 @@ bool App::HandleTextEditingKey(UINT key) {
 
 bool App::HandleNavigationKey(UINT key, bool ctrl, bool shift) {
     (void)ctrl; (void)shift;
-    DWORD now = GetTickCount();
 
     switch (key) {
     case VK_RIGHT:
-        if (!m_isNavigating || (now - m_lastNavigateTime) >= NAVIGATE_DELAY_MS) {
-            NavigateNext();
-            m_isNavigating = true;
-            m_lastNavigateTime = now;
-        }
-        return true;
+        return TryNavigateWithDelay([this]() { NavigateNext(); return true; });
 
     case VK_LEFT:
-        if (!m_isNavigating || (now - m_lastNavigateTime) >= NAVIGATE_DELAY_MS) {
-            NavigatePrevious();
-            m_isNavigating = true;
-            m_lastNavigateTime = now;
-        }
-        return true;
+        return TryNavigateWithDelay([this]() { NavigatePrevious(); return true; });
 
     case VK_HOME:
         NavigateFirst();
