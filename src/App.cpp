@@ -976,67 +976,25 @@ bool App::SaveImageToFile(const std::wstring& filePath) {
 }
 
 void App::RotateCW() {
-    if (!m_currentImage || m_currentImage->filePath.empty()) return;
-
-    m_rotation = (m_rotation + 90) % 360;
-    m_renderer->SetRotation(m_rotation);
-    InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
-
-    // Auto-save rotation (rotation is reversible by rotating back)
-    fs::path origPath(m_currentImage->filePath);
-    fs::path tempPath = origPath.parent_path() / (L"~temp_" + origPath.filename().wstring());
-    std::wstring savedFilePath = m_currentImage->filePath;
-
-    // Save current state (without markups for rotation-only save)
-    auto savedStrokes = m_markupStrokes;
-    auto savedTexts = m_textOverlays;
-    bool savedHasCrop = m_hasCrop;
-    auto savedCrop = m_appliedCrop;
-    m_markupStrokes.clear();
-    m_textOverlays.clear();
-    m_hasCrop = false;
-    m_appliedCrop = {};
-
-    if (SaveImageToFile(tempPath.wstring())) {
-        m_currentImage->bitmap.Reset();
-        m_currentImage = nullptr;
-        m_renderer->ClearImage();
-
-        try {
-            fs::remove(origPath);
-            fs::rename(tempPath, origPath);
-        } catch (...) {
-            try { fs::remove(tempPath); } catch (...) {}
-        }
-
-        m_rotation = 0;
-        m_renderer->SetRotation(0);
-        m_navigator->SetCurrentFile(savedFilePath);
-        LoadCurrentImage();
-    }
-
-    // Restore markups/crop state
-    m_markupStrokes = savedStrokes;
-    m_textOverlays = savedTexts;
-    m_hasCrop = savedHasCrop;
-    m_appliedCrop = savedCrop;
-    UpdateRendererMarkup();
-    UpdateRendererText();
+    RotateAndSaveImage(90);
 }
 
 void App::RotateCCW() {
+    RotateAndSaveImage(270);
+}
+
+void App::RotateAndSaveImage(int rotationDelta) {
     if (!m_currentImage || m_currentImage->filePath.empty()) return;
 
-    m_rotation = (m_rotation + 270) % 360;
+    m_rotation = (m_rotation + rotationDelta) % 360;
     m_renderer->SetRotation(m_rotation);
     InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
 
-    // Auto-save rotation (rotation is reversible by rotating back)
     fs::path origPath(m_currentImage->filePath);
     fs::path tempPath = origPath.parent_path() / (L"~temp_" + origPath.filename().wstring());
     std::wstring savedFilePath = m_currentImage->filePath;
 
-    // Save current state (without markups for rotation-only save)
+    // Save current edit state (rotation saves without markups)
     auto savedStrokes = m_markupStrokes;
     auto savedTexts = m_textOverlays;
     bool savedHasCrop = m_hasCrop;
@@ -1064,7 +1022,7 @@ void App::RotateCCW() {
         LoadCurrentImage();
     }
 
-    // Restore markups/crop state
+    // Restore edit state
     m_markupStrokes = savedStrokes;
     m_textOverlays = savedTexts;
     m_hasCrop = savedHasCrop;
@@ -1073,44 +1031,15 @@ void App::RotateCCW() {
     UpdateRendererText();
 }
 
-void App::ToggleCropMode() {
-    if (m_editMode == EditMode::Crop) {
-        m_editMode = EditMode::None;
-    } else {
-        m_editMode = EditMode::Crop;
+void App::ToggleEditMode(EditMode mode) {
+    m_editMode = (m_editMode == mode) ? EditMode::None : mode;
+
+    // Mode-specific initialization
+    if (mode == EditMode::Crop) {
         m_isCropDragging = false;
+        m_renderer->SetCropMode(m_editMode == EditMode::Crop);
     }
-    m_renderer->SetCropMode(m_editMode == EditMode::Crop);
-    UpdateTitle();
-    InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
-}
 
-void App::ToggleMarkupMode() {
-    if (m_editMode == EditMode::Markup) {
-        m_editMode = EditMode::None;
-    } else {
-        m_editMode = EditMode::Markup;
-    }
-    UpdateTitle();
-    InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
-}
-
-void App::ToggleTextMode() {
-    if (m_editMode == EditMode::Text) {
-        m_editMode = EditMode::None;
-    } else {
-        m_editMode = EditMode::Text;
-    }
-    UpdateTitle();
-    InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
-}
-
-void App::ToggleEraseMode() {
-    if (m_editMode == EditMode::Erase) {
-        m_editMode = EditMode::None;
-    } else {
-        m_editMode = EditMode::Erase;
-    }
     UpdateTitle();
     InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
 }
@@ -1165,15 +1094,25 @@ void App::UpdateRendererText() {
     m_renderer->SetTextOverlays(rendererTexts);
 }
 
-void App::EraseAtPoint(int x, int y) {
+bool App::ScreenToNormalizedImageCoords(int screenX, int screenY, float& normX, float& normY) const {
     D2D1_RECT_F imageRect = m_renderer->GetScreenImageRect();
     float imageW = imageRect.right - imageRect.left;
     float imageH = imageRect.bottom - imageRect.top;
 
-    if (imageW <= 0 || imageH <= 0) return;
+    if (imageW <= 0 || imageH <= 0) return false;
 
-    float normX = (static_cast<float>(x) - imageRect.left) / imageW;
-    float normY = (static_cast<float>(y) - imageRect.top) / imageH;
+    normX = (static_cast<float>(screenX) - imageRect.left) / imageW;
+    normY = (static_cast<float>(screenY) - imageRect.top) / imageH;
+    return true;
+}
+
+void App::EraseAtPoint(int x, int y) {
+    float normX, normY;
+    if (!ScreenToNormalizedImageCoords(x, y, normX, normY)) return;
+
+    D2D1_RECT_F imageRect = m_renderer->GetScreenImageRect();
+    float imageW = imageRect.right - imageRect.left;
+    float imageH = imageRect.bottom - imageRect.top;
     float hitRadius = 30.0f / std::min(imageW, imageH);
 
     bool erased = false;
@@ -1496,7 +1435,7 @@ void App::OnKeyDown(UINT key) {
         if (ctrl) {
             CopyToClipboard();
         } else {
-            ToggleCropMode();
+            ToggleEditMode(EditMode::Crop);
         }
         break;
 
@@ -1525,15 +1464,15 @@ void App::OnKeyDown(UINT key) {
         break;
 
     case 'M':
-        ToggleMarkupMode();
+        ToggleEditMode(EditMode::Markup);
         break;
 
     case 'T':
-        ToggleTextMode();
+        ToggleEditMode(EditMode::Text);
         break;
 
     case 'E':
-        ToggleEraseMode();
+        ToggleEditMode(EditMode::Erase);
         break;
 
     case 'Z':
@@ -1594,35 +1533,28 @@ void App::OnMouseDown(int x, int y) {
         m_cropEndY = y;
         SetCapture(m_window->GetHwnd());
     } else if (m_editMode == EditMode::Markup) {
-        // Convert screen coords to normalized image coords (0-1 range)
-        D2D1_RECT_F imageRect = m_renderer->GetScreenImageRect();
-        float imageW = imageRect.right - imageRect.left;
-        float imageH = imageRect.bottom - imageRect.top;
-        if (imageW > 0 && imageH > 0) {
-            float normX = (static_cast<float>(x) - imageRect.left) / imageW;
-            float normY = (static_cast<float>(y) - imageRect.top) / imageH;
+        float normX, normY;
+        if (ScreenToNormalizedImageCoords(x, y, normX, normY)) {
+            D2D1_RECT_F imageRect = m_renderer->GetScreenImageRect();
+            float imageW = imageRect.right - imageRect.left;
 
             PushUndoState();
             m_isDrawing = true;
             MarkupStroke stroke;
             stroke.color = D2D1::ColorF(D2D1::ColorF::Red);
-            stroke.width = 3.0f / imageW;  // Normalize stroke width too
+            stroke.width = 3.0f / imageW;
             stroke.points.push_back(D2D1::Point2F(normX, normY));
             m_markupStrokes.push_back(stroke);
             UpdateRendererMarkup();
             SetCapture(m_window->GetHwnd());
         }
     } else if (m_editMode == EditMode::Text) {
-        // Convert screen coords to normalized image coords
-        D2D1_RECT_F imageRect = m_renderer->GetScreenImageRect();
-        float imageW = imageRect.right - imageRect.left;
-        float imageH = imageRect.bottom - imageRect.top;
-        if (imageW > 0 && imageH > 0) {
-            // Start inline text editing at click position
+        float normX, normY;
+        if (ScreenToNormalizedImageCoords(x, y, normX, normY)) {
             m_isEditingText = true;
             m_editingText.clear();
-            m_editingTextX = (static_cast<float>(x) - imageRect.left) / imageW;
-            m_editingTextY = (static_cast<float>(y) - imageRect.top) / imageH;
+            m_editingTextX = normX;
+            m_editingTextY = normY;
             UpdateRendererText();
             InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
         }
@@ -1670,13 +1602,8 @@ void App::OnMouseMove(int x, int y) {
         m_renderer->SetCropRect(D2D1::RectF(left, top, right, bottom));
         InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
     } else if (m_isDrawing && !m_markupStrokes.empty()) {
-        // Convert screen coords to normalized image coords
-        D2D1_RECT_F imageRect = m_renderer->GetScreenImageRect();
-        float imageW = imageRect.right - imageRect.left;
-        float imageH = imageRect.bottom - imageRect.top;
-        if (imageW > 0 && imageH > 0) {
-            float normX = (static_cast<float>(x) - imageRect.left) / imageW;
-            float normY = (static_cast<float>(y) - imageRect.top) / imageH;
+        float normX, normY;
+        if (ScreenToNormalizedImageCoords(x, y, normX, normY)) {
             m_markupStrokes.back().points.push_back(D2D1::Point2F(normX, normY));
             UpdateRendererMarkup();
             InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);

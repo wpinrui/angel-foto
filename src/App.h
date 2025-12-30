@@ -29,6 +29,9 @@ public:
     void OpenFile(const std::wstring& filePath);
 
 private:
+    // Edit modes (declared early for use in method signatures)
+    enum class EditMode { None, Crop, Markup, Text, Erase };
+
     void LoadCurrentImage();
     void UpdateTitle();
     void NavigateNext();
@@ -50,10 +53,8 @@ private:
     void SaveImageAs();
     void RotateCW();
     void RotateCCW();
-    void ToggleCropMode();
-    void ToggleMarkupMode();
-    void ToggleTextMode();
-    void ToggleEraseMode();
+    void RotateAndSaveImage(int rotationDelta);  // Shared rotation logic
+    void ToggleEditMode(EditMode mode);  // Unified edit mode toggle
     void CancelCurrentMode();
     void ApplyCrop();
 
@@ -64,6 +65,9 @@ private:
     void UpdateRendererMarkup();
     void UpdateRendererText();
     void EraseAtPoint(int x, int y);
+
+    // Coordinate transformation helper
+    bool ScreenToNormalizedImageCoords(int screenX, int screenY, float& normX, float& normY) const;
 
     // Undo support
     void PushUndoState();
@@ -105,8 +109,7 @@ private:
     // Rotation state (0, 90, 180, 270 degrees)
     int m_rotation = 0;
 
-    // Edit modes
-    enum class EditMode { None, Crop, Markup, Text, Erase };
+    // Current edit mode
     EditMode m_editMode = EditMode::None;
 
     // Crop selection
