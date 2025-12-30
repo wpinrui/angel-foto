@@ -128,14 +128,14 @@ void Renderer::CreateDeviceResources() {
 
     // Create swap chain
     DXGI_SWAP_CHAIN_DESC1 swapChainDesc = {};
-    swapChainDesc.Width = m_width > 0 ? m_width : 1;
-    swapChainDesc.Height = m_height > 0 ? m_height : 1;
+    swapChainDesc.Width = m_width > 0 ? m_width : MIN_DIMENSION;
+    swapChainDesc.Height = m_height > 0 ? m_height : MIN_DIMENSION;
     swapChainDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
     swapChainDesc.Stereo = FALSE;
     swapChainDesc.SampleDesc.Count = 1;
     swapChainDesc.SampleDesc.Quality = 0;
     swapChainDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-    swapChainDesc.BufferCount = 2;
+    swapChainDesc.BufferCount = SWAP_CHAIN_BUFFER_COUNT;
     swapChainDesc.Scaling = DXGI_SCALING_NONE;
     swapChainDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
     swapChainDesc.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
@@ -337,6 +337,79 @@ D2D1_RECT_F Renderer::CalculateImageRect() const {
     return D2D1::RectF(x, y, x + scaledWidth, y + scaledHeight);
 }
 
+void Renderer::RenderMarkupStrokes(const D2D1_RECT_F& screenRect) {
+    float screenW = screenRect.right - screenRect.left;
+    float screenH = screenRect.bottom - screenRect.top;
+
+    for (const auto& stroke : m_markupStrokes) {
+        if (stroke.points.size() < 2) continue;
+
+        ComPtr<ID2D1SolidColorBrush> brush;
+        m_deviceContext->CreateSolidColorBrush(stroke.color, &brush);
+        if (!brush) continue;
+
+        float screenStrokeWidth = stroke.width * screenW;
+
+        for (size_t i = 1; i < stroke.points.size(); ++i) {
+            D2D1_POINT_2F p1 = {
+                screenRect.left + stroke.points[i - 1].x * screenW,
+                screenRect.top + stroke.points[i - 1].y * screenH
+            };
+            D2D1_POINT_2F p2 = {
+                screenRect.left + stroke.points[i].x * screenW,
+                screenRect.top + stroke.points[i].y * screenH
+            };
+            m_deviceContext->DrawLine(p1, p2, brush.Get(), screenStrokeWidth);
+        }
+    }
+}
+
+void Renderer::RenderTextOverlays(const D2D1_RECT_F& screenRect) {
+    if (!m_dwriteFactory) return;
+
+    float screenW = screenRect.right - screenRect.left;
+    float screenH = screenRect.bottom - screenRect.top;
+
+    for (const auto& text : m_textOverlays) {
+        ComPtr<IDWriteTextFormat> textFormat;
+        float screenFontSize = text.fontSize * screenW;
+        m_dwriteFactory->CreateTextFormat(DEFAULT_FONT_NAME, nullptr,
+            DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+            screenFontSize, DEFAULT_LOCALE, &textFormat);
+        if (!textFormat) continue;
+
+        ComPtr<ID2D1SolidColorBrush> brush;
+        m_deviceContext->CreateSolidColorBrush(text.color, &brush);
+        if (!brush) continue;
+
+        float screenX = screenRect.left + text.x * screenW;
+        float screenY = screenRect.top + text.y * screenH;
+        m_deviceContext->DrawText(text.text.c_str(), (UINT32)text.text.length(),
+            textFormat.Get(), D2D1::RectF(screenX, screenY, screenX + 1000, screenY + 200), brush.Get());
+    }
+}
+
+void Renderer::RenderCropOverlay() {
+    if (!m_cropMode || !m_cropBrush || !m_cropDimBrush) return;
+    if (m_cropRect.right <= m_cropRect.left || m_cropRect.bottom <= m_cropRect.top) return;
+
+    float width = static_cast<float>(m_width);
+    float height = static_cast<float>(m_height);
+
+    // Dim area outside crop rect (top, bottom, left, right regions)
+    m_deviceContext->FillRectangle(
+        D2D1::RectF(0, 0, width, m_cropRect.top), m_cropDimBrush.Get());
+    m_deviceContext->FillRectangle(
+        D2D1::RectF(0, m_cropRect.bottom, width, height), m_cropDimBrush.Get());
+    m_deviceContext->FillRectangle(
+        D2D1::RectF(0, m_cropRect.top, m_cropRect.left, m_cropRect.bottom), m_cropDimBrush.Get());
+    m_deviceContext->FillRectangle(
+        D2D1::RectF(m_cropRect.right, m_cropRect.top, width, m_cropRect.bottom), m_cropDimBrush.Get());
+
+    // Draw crop border
+    m_deviceContext->DrawRectangle(m_cropRect, m_cropBrush.Get(), CROP_BORDER_WIDTH);
+}
+
 void Renderer::Render() {
     if (!m_deviceContext || !m_targetBitmap) return;
 
@@ -356,7 +429,6 @@ void Renderer::Render() {
             );
 
             // Adjust destRect for rotated image
-            auto imageSize = m_currentImage->GetSize();
             if (m_rotation == 90 || m_rotation == 270) {
                 float w = destRect.right - destRect.left;
                 float h = destRect.bottom - destRect.top;
@@ -378,81 +450,11 @@ void Renderer::Render() {
         // Reset transform
         m_deviceContext->SetTransform(D2D1::Matrix3x2F::Identity());
 
-        // Draw markup strokes (strokes are in normalized 0-1 image coords)
+        // Render overlays using extracted helper methods
         D2D1_RECT_F screenRect = CalculateImageRect();
-        float screenW = screenRect.right - screenRect.left;
-        float screenH = screenRect.bottom - screenRect.top;
-
-        for (const auto& stroke : m_markupStrokes) {
-            if (stroke.points.size() < 2) continue;
-
-            ComPtr<ID2D1SolidColorBrush> brush;
-            m_deviceContext->CreateSolidColorBrush(stroke.color, &brush);
-            if (!brush) continue;
-
-            // Convert normalized stroke width to screen pixels
-            float screenStrokeWidth = stroke.width * screenW;
-
-            for (size_t i = 1; i < stroke.points.size(); ++i) {
-                // Convert normalized coords to screen coords
-                D2D1_POINT_2F p1 = {
-                    screenRect.left + stroke.points[i - 1].x * screenW,
-                    screenRect.top + stroke.points[i - 1].y * screenH
-                };
-                D2D1_POINT_2F p2 = {
-                    screenRect.left + stroke.points[i].x * screenW,
-                    screenRect.top + stroke.points[i].y * screenH
-                };
-                m_deviceContext->DrawLine(p1, p2, brush.Get(), screenStrokeWidth);
-            }
-        }
-
-        // Draw text overlays (normalized 0-1 coords)
-        if (m_dwriteFactory) {
-            for (const auto& text : m_textOverlays) {
-                ComPtr<IDWriteTextFormat> textFormat;
-                float screenFontSize = text.fontSize * screenW;
-                m_dwriteFactory->CreateTextFormat(DEFAULT_FONT_NAME, nullptr,
-                    DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
-                    screenFontSize, DEFAULT_LOCALE, &textFormat);
-                if (!textFormat) continue;
-
-                ComPtr<ID2D1SolidColorBrush> brush;
-                m_deviceContext->CreateSolidColorBrush(text.color, &brush);
-                if (!brush) continue;
-
-                float screenX = screenRect.left + text.x * screenW;
-                float screenY = screenRect.top + text.y * screenH;
-                m_deviceContext->DrawText(text.text.c_str(), (UINT32)text.text.length(),
-                    textFormat.Get(), D2D1::RectF(screenX, screenY, screenX + 1000, screenY + 200), brush.Get());
-            }
-        }
-
-        // Draw crop overlay if in crop mode
-        if (m_cropMode && m_cropBrush && m_cropDimBrush) {
-            // Dim area outside crop rect
-            if (m_cropRect.right > m_cropRect.left && m_cropRect.bottom > m_cropRect.top) {
-                // Top region
-                m_deviceContext->FillRectangle(
-                    D2D1::RectF(0, 0, static_cast<float>(m_width), m_cropRect.top),
-                    m_cropDimBrush.Get());
-                // Bottom region
-                m_deviceContext->FillRectangle(
-                    D2D1::RectF(0, m_cropRect.bottom, static_cast<float>(m_width), static_cast<float>(m_height)),
-                    m_cropDimBrush.Get());
-                // Left region
-                m_deviceContext->FillRectangle(
-                    D2D1::RectF(0, m_cropRect.top, m_cropRect.left, m_cropRect.bottom),
-                    m_cropDimBrush.Get());
-                // Right region
-                m_deviceContext->FillRectangle(
-                    D2D1::RectF(m_cropRect.right, m_cropRect.top, static_cast<float>(m_width), m_cropRect.bottom),
-                    m_cropDimBrush.Get());
-
-                // Draw crop border
-                m_deviceContext->DrawRectangle(m_cropRect, m_cropBrush.Get(), CROP_BORDER_WIDTH);
-            }
-        }
+        RenderMarkupStrokes(screenRect);
+        RenderTextOverlays(screenRect);
+        RenderCropOverlay();
     }
 
     HRESULT hr = m_deviceContext->EndDraw();

@@ -47,6 +47,17 @@ public:
     static constexpr wchar_t DEFAULT_FONT_NAME[] = L"Segoe UI";
     static constexpr wchar_t DEFAULT_LOCALE[] = L"en-us";
 
+    // Image format constants (public for helper function access)
+    static constexpr UINT RGBA_BYTES_PER_PIXEL = 4;
+
+    // EditState struct (public because used in public-accessible helper methods)
+    struct EditState {
+        std::vector<MarkupStroke> strokes;
+        std::vector<TextOverlay> texts;
+        bool hasCrop;
+        WICRect appliedCrop;
+    };
+
 private:
     // Edit modes (declared early for use in method signatures)
     enum class EditMode { None, Crop, Markup, Text, Erase };
@@ -85,6 +96,7 @@ private:
     ComPtr<IWICBitmapSource> ApplyWICRotation(IWICImagingFactory* wicFactory, IWICBitmapSource* source);
     ComPtr<IWICBitmapSource> ApplyWICCrop(IWICImagingFactory* wicFactory, IWICBitmapSource* source);
     ComPtr<IWICBitmap> CreateWICBitmapWithOverlays(IWICImagingFactory* wicFactory, ID2D1Factory* d2dFactory, IWICBitmapSource* source);
+    ComPtr<IWICBitmap> GetTransformedImageWithOverlays(IWICImagingFactory* wicFactory, ID2D1Factory* d2dFactory);
 
     // Clipboard helpers
     HGLOBAL CreateDIBFromBitmap(IWICBitmap* bitmap, UINT width, UINT height);
@@ -112,6 +124,8 @@ private:
     void PushUndoState();
     void Undo();
     bool HasPendingEdits() const;
+    EditState SaveCurrentEditState() const;
+    void RestoreEditState(const EditState& state);
 
     // GIF animation
     void StartGifAnimation();
@@ -172,6 +186,11 @@ private:
     static constexpr float TEXT_HIT_BOX_WIDTH = 0.2f;
     static constexpr float JPEG_SAVE_QUALITY = 0.9f;
 
+    // File naming constants
+    static constexpr wchar_t WALLPAPER_TEMP_PREFIX[] = L"angel_foto_wallpaper";
+    static constexpr wchar_t PNG_CLIPBOARD_FORMAT[] = L"PNG";
+    static constexpr int EDITED_FILE_COUNTER_START = 2;
+
     // UI constants
     static constexpr wchar_t MIN_PRINTABLE_CHAR = 32;
 
@@ -227,12 +246,6 @@ private:
     float m_editingTextY = 0;
 
     // Undo stack
-    struct EditState {
-        std::vector<MarkupStroke> strokes;
-        std::vector<TextOverlay> texts;
-        bool hasCrop;
-        WICRect appliedCrop;
-    };
     std::vector<EditState> m_undoStack;
     static const size_t MAX_UNDO_LEVELS = 50;
 };

@@ -62,6 +62,11 @@ private:
     void DiscardDeviceResources();
     D2D1_RECT_F CalculateImageRect() const;
 
+    // Rendering sub-routines (extracted from Render for clarity)
+    void RenderMarkupStrokes(const D2D1_RECT_F& screenRect);
+    void RenderTextOverlays(const D2D1_RECT_F& screenRect);
+    void RenderCropOverlay();
+
     HWND m_hwnd = nullptr;
     int m_width = 0;
     int m_height = 0;
@@ -103,6 +108,10 @@ private:
     // Zoom limits
     static constexpr float MIN_ZOOM = 0.1f;
     static constexpr float MAX_ZOOM = 10.0f;
+
+    // Swap chain constants
+    static constexpr UINT SWAP_CHAIN_BUFFER_COUNT = 2;
+    static constexpr UINT MIN_DIMENSION = 1;
 
     // Text rendering constants
     static constexpr wchar_t DEFAULT_FONT_NAME[] = L"Segoe UI";

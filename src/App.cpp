@@ -33,8 +33,8 @@ static WICBitmapTransformOptions GetWICTransformForRotation(int rotation) {
 }
 
 // Helper to flip buffer from top-down to bottom-up for Windows DIB format
-static void FlipBufferVertically(const std::vector<BYTE>& src, std::vector<BYTE>& dst, UINT width, UINT height, UINT bytesPerPixel) {
-    UINT stride = width * bytesPerPixel;
+static void FlipBufferVertically(const std::vector<BYTE>& src, std::vector<BYTE>& dst, UINT width, UINT height) {
+    UINT stride = width * App::RGBA_BYTES_PER_PIXEL;
     dst.resize(src.size());
     for (UINT y = 0; y < height; ++y) {
         memcpy(&dst[y * stride], &src[(height - 1 - y) * stride], stride);
@@ -172,11 +172,36 @@ ComPtr<IWICBitmap> App::CreateWICBitmapWithOverlays(IWICImagingFactory* wicFacto
     return wicBitmap;
 }
 
+// Initialize BITMAPINFOHEADER for 32-bit RGBA image (bottom-up format)
+static void InitializeDIBHeader(BITMAPINFOHEADER& bi, UINT width, UINT height) {
+    bi = {};
+    bi.biSize = sizeof(BITMAPINFOHEADER);
+    bi.biWidth = width;
+    bi.biHeight = height;  // Positive = bottom-up
+    bi.biPlanes = 1;
+    bi.biBitCount = 32;
+    bi.biCompression = BI_RGB;
+}
+
+// Get fully transformed image with all overlays applied (rotation, crop, markup, text)
+ComPtr<IWICBitmap> App::GetTransformedImageWithOverlays(IWICImagingFactory* wicFactory, ID2D1Factory* d2dFactory) {
+    ComPtr<IWICBitmapSource> source = LoadAndDecodeImage(wicFactory, GUID_WICPixelFormat32bppPBGRA);
+    if (!source) return nullptr;
+
+    source = ApplyWICRotation(wicFactory, source.Get());
+    if (!source) return nullptr;
+
+    source = ApplyWICCrop(wicFactory, source.Get());
+    if (!source) return nullptr;
+
+    return CreateWICBitmapWithOverlays(wicFactory, d2dFactory, source.Get());
+}
+
 // Create DIB (Device Independent Bitmap) for clipboard from WIC bitmap
 HGLOBAL App::CreateDIBFromBitmap(IWICBitmap* bitmap, UINT width, UINT height) {
     if (!bitmap) return nullptr;
 
-    UINT stride = width * 4;
+    UINT stride = width * RGBA_BYTES_PER_PIXEL;
     std::vector<BYTE> buffer(stride * height);
     WICRect rcCopy = { 0, 0, (INT)width, (INT)height };
     HRESULT hr = bitmap->CopyPixels(&rcCopy, stride, (UINT)buffer.size(), buffer.data());
@@ -184,16 +209,11 @@ HGLOBAL App::CreateDIBFromBitmap(IWICBitmap* bitmap, UINT width, UINT height) {
 
     // Flip buffer to bottom-up for Windows clipboard compatibility
     std::vector<BYTE> flippedBuffer;
-    FlipBufferVertically(buffer, flippedBuffer, width, height, 4);
+    FlipBufferVertically(buffer, flippedBuffer, width, height);
 
     // Create DIB header
-    BITMAPINFOHEADER bi = {};
-    bi.biSize = sizeof(BITMAPINFOHEADER);
-    bi.biWidth = width;
-    bi.biHeight = height; // Positive = bottom-up
-    bi.biPlanes = 1;
-    bi.biBitCount = 32;
-    bi.biCompression = BI_RGB;
+    BITMAPINFOHEADER bi;
+    InitializeDIBHeader(bi, width, height);
 
     HGLOBAL hDib = GlobalAlloc(GMEM_MOVEABLE, sizeof(BITMAPINFOHEADER) + flippedBuffer.size());
     if (!hDib) return nullptr;
@@ -275,15 +295,10 @@ HGLOBAL App::EncodeBitmapToPNG(IWICImagingFactory* wicFactory, IWICBitmap* bitma
 HBITMAP App::CreateHBITMAPFromBuffer(const std::vector<BYTE>& buffer, UINT width, UINT height) {
     // First flip the buffer to bottom-up format
     std::vector<BYTE> flippedBuffer;
-    FlipBufferVertically(buffer, flippedBuffer, width, height, 4);
+    FlipBufferVertically(buffer, flippedBuffer, width, height);
 
     BITMAPINFO bmi = {};
-    bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-    bmi.bmiHeader.biWidth = width;
-    bmi.bmiHeader.biHeight = height; // Positive = bottom-up
-    bmi.bmiHeader.biPlanes = 1;
-    bmi.bmiHeader.biBitCount = 32;
-    bmi.bmiHeader.biCompression = BI_RGB;
+    InitializeDIBHeader(bmi.bmiHeader, width, height);
 
     HDC hdc = GetDC(nullptr);
     HBITMAP hBitmap = CreateDIBitmap(hdc, &bmi.bmiHeader, CBM_INIT,
@@ -563,18 +578,8 @@ void App::CopyToClipboard() {
     auto d2dFactory = m_renderer->GetFactory();
     if (!wicFactory || !d2dFactory) return;
 
-    // Load, decode, and apply transformations
-    ComPtr<IWICBitmapSource> source = LoadAndDecodeImage(wicFactory, GUID_WICPixelFormat32bppPBGRA);
-    if (!source) return;
-
-    source = ApplyWICRotation(wicFactory, source.Get());
-    if (!source) return;
-
-    source = ApplyWICCrop(wicFactory, source.Get());
-    if (!source) return;
-
-    // Create bitmap with markup overlays
-    ComPtr<IWICBitmap> wicBitmap = CreateWICBitmapWithOverlays(wicFactory, d2dFactory, source.Get());
+    // Get transformed image with all overlays applied
+    ComPtr<IWICBitmap> wicBitmap = GetTransformedImageWithOverlays(wicFactory, d2dFactory);
     if (!wicBitmap) return;
 
     UINT width, height;
@@ -585,7 +590,7 @@ void App::CopyToClipboard() {
     HGLOBAL hPng = EncodeBitmapToPNG(wicFactory, wicBitmap.Get());
 
     // Get pixel buffer for HBITMAP creation
-    UINT stride = width * 4;
+    UINT stride = width * RGBA_BYTES_PER_PIXEL;
     std::vector<BYTE> buffer(stride * height);
     WICRect rcCopy = { 0, 0, (INT)width, (INT)height };
     wicBitmap->CopyPixels(&rcCopy, stride, (UINT)buffer.size(), buffer.data());
@@ -596,7 +601,7 @@ void App::CopyToClipboard() {
         EmptyClipboard();
 
         // PNG format for browsers and modern apps
-        UINT pngFormat = RegisterClipboardFormatW(L"PNG");
+        UINT pngFormat = RegisterClipboardFormatW(PNG_CLIPBOARD_FORMAT);
         if (pngFormat && hPng) {
             SetClipboardData(pngFormat, hPng);
             hPng = nullptr;
@@ -632,7 +637,7 @@ void App::SetAsWallpaper() {
 
     fs::path srcPath(m_currentImage->filePath);
     std::wstring ext = srcPath.extension().wstring();
-    std::wstring wallpaperPath = std::wstring(tempPath) + L"angel_foto_wallpaper" + ext;
+    std::wstring wallpaperPath = std::wstring(tempPath) + WALLPAPER_TEMP_PREFIX + ext;
 
     try {
         fs::copy_file(m_currentImage->filePath, wallpaperPath, fs::copy_options::overwrite_existing);
@@ -737,7 +742,7 @@ void App::SaveImage() {
             (origPath.stem().wstring() + L"_edited" + origPath.extension().wstring());
 
         // If file exists, add number: image_edited_2.jpg
-        int counter = 2;
+        int counter = EDITED_FILE_COUNTER_START;
         while (fs::exists(copyPath)) {
             copyPath = origPath.parent_path() /
                 (origPath.stem().wstring() + L"_edited_" + std::to_wstring(counter++) + origPath.extension().wstring());
@@ -905,19 +910,8 @@ bool App::SaveImageToFile(const std::wstring& filePath) {
     fs::path path(filePath);
     GUID containerFormat = GetContainerFormatForExtension(path.extension().wstring());
 
-    // Load, decode, and apply transformations
-    // Use 32bppPBGRA for D2D rendering compatibility
-    ComPtr<IWICBitmapSource> source = LoadAndDecodeImage(wicFactory, GUID_WICPixelFormat32bppPBGRA);
-    if (!source) return false;
-
-    source = ApplyWICRotation(wicFactory, source.Get());
-    if (!source) return false;
-
-    source = ApplyWICCrop(wicFactory, source.Get());
-    if (!source) return false;
-
-    // Create bitmap with markup overlays
-    ComPtr<IWICBitmap> wicBitmap = CreateWICBitmapWithOverlays(wicFactory, d2dFactory, source.Get());
+    // Get transformed image with all overlays applied
+    ComPtr<IWICBitmap> wicBitmap = GetTransformedImageWithOverlays(wicFactory, d2dFactory);
     if (!wicBitmap) return false;
 
     return EncodeAndSaveToFile(wicFactory, wicBitmap.Get(), filePath, containerFormat);
@@ -943,10 +937,7 @@ void App::RotateAndSaveImage(int rotationDelta) {
     std::wstring savedFilePath = m_currentImage->filePath;
 
     // Save current edit state (rotation saves without markups)
-    auto savedStrokes = m_markupStrokes;
-    auto savedTexts = m_textOverlays;
-    bool savedHasCrop = m_hasCrop;
-    auto savedCrop = m_appliedCrop;
+    EditState savedState = SaveCurrentEditState();
     m_markupStrokes.clear();
     m_textOverlays.clear();
     m_hasCrop = false;
@@ -971,10 +962,7 @@ void App::RotateAndSaveImage(int rotationDelta) {
     }
 
     // Restore edit state
-    m_markupStrokes = savedStrokes;
-    m_textOverlays = savedTexts;
-    m_hasCrop = savedHasCrop;
-    m_appliedCrop = savedCrop;
+    RestoreEditState(savedState);
     UpdateRendererMarkup();
     UpdateRendererText();
 }
@@ -1149,6 +1137,22 @@ void App::Undo() {
 
 bool App::HasPendingEdits() const {
     return !m_markupStrokes.empty() || !m_textOverlays.empty() || m_hasCrop;
+}
+
+App::EditState App::SaveCurrentEditState() const {
+    EditState state;
+    state.strokes = m_markupStrokes;
+    state.texts = m_textOverlays;
+    state.hasCrop = m_hasCrop;
+    state.appliedCrop = m_appliedCrop;
+    return state;
+}
+
+void App::RestoreEditState(const EditState& state) {
+    m_markupStrokes = state.strokes;
+    m_textOverlays = state.texts;
+    m_hasCrop = state.hasCrop;
+    m_appliedCrop = state.appliedCrop;
 }
 
 void App::ClearEditState(bool clearRotation) {
