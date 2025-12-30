@@ -6,8 +6,6 @@ const std::vector<std::wstring> ImageLoader::s_supportedExtensions = {
     L".webp", L".heic", L".heif", L".ico", L".jfif"
 };
 
-ImageLoader::ImageLoader() {}
-
 void ImageLoader::Initialize(ID2D1DeviceContext* deviceContext, IWICImagingFactory* wicFactory) {
     m_deviceContext = deviceContext;
     m_wicFactory = wicFactory;

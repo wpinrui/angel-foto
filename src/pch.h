@@ -75,4 +75,5 @@ namespace Colors {
     constexpr D2D1_COLOR_F WHITE = { 1.0f, 1.0f, 1.0f, 1.0f };
     constexpr D2D1_COLOR_F RED = { 1.0f, 0.0f, 0.0f, 1.0f };
     constexpr D2D1_COLOR_F BLACK = { 0.0f, 0.0f, 0.0f, 1.0f };
+    constexpr D2D1_COLOR_F DARK_GRAY = { 0.1f, 0.1f, 0.1f, 1.0f };
 }

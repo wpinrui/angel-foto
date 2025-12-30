@@ -16,7 +16,7 @@ struct ImageData {
 
 class ImageLoader {
 public:
-    ImageLoader();
+    ImageLoader() = default;
     ~ImageLoader() = default;
 
     void Initialize(ID2D1DeviceContext* deviceContext, IWICImagingFactory* wicFactory);

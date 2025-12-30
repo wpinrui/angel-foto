@@ -3,7 +3,7 @@
 
 class FolderNavigator {
 public:
-    FolderNavigator();
+    FolderNavigator() = default;
     ~FolderNavigator() = default;
 
     // Set current file and scan folder for images

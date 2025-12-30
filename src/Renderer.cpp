@@ -17,8 +17,6 @@ static float ClampToBounds(float value, float maxValue) {
     return std::max(0.0f, std::min(value, maxValue));
 }
 
-Renderer::Renderer() {}
-
 Renderer::~Renderer() {
     DiscardDeviceResources();
 }

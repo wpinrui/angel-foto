@@ -3,7 +3,7 @@
 
 class Renderer {
 public:
-    Renderer();
+    Renderer() = default;
     ~Renderer();
 
     bool Initialize(HWND hwnd);
@@ -107,7 +107,7 @@ private:
     ComPtr<IDWriteFactory> m_dwriteFactory;
 
     // Background color (dark)
-    D2D1_COLOR_F m_backgroundColor = { 0.1f, 0.1f, 0.1f, 1.0f };
+    D2D1_COLOR_F m_backgroundColor = Colors::DARK_GRAY;
 
     // Zoom limits
     static constexpr float MIN_ZOOM = 0.1f;

@@ -2,8 +2,6 @@
 #include "FolderNavigator.h"
 #include "ImageLoader.h"
 
-FolderNavigator::FolderNavigator() {}
-
 void FolderNavigator::SetCurrentFile(const std::wstring& filePath) {
     fs::path path(filePath);
 
