@@ -25,6 +25,15 @@ static WICBitmapTransformOptions GetWICTransformForRotation(int rotation) {
     }
 }
 
+// Helper to flip buffer from top-down to bottom-up for Windows DIB format
+static void FlipBufferVertically(const std::vector<BYTE>& src, std::vector<BYTE>& dst, UINT width, UINT height, UINT bytesPerPixel) {
+    UINT stride = width * bytesPerPixel;
+    dst.resize(src.size());
+    for (UINT y = 0; y < height; ++y) {
+        memcpy(&dst[y * stride], &src[(height - 1 - y) * stride], stride);
+    }
+}
+
 // Helper to render markup strokes and text overlays to a D2D render target
 static void RenderMarkupAndTextToTarget(
     ID2D1RenderTarget* renderTarget,
@@ -71,6 +80,210 @@ static void RenderMarkupAndTextToTarget(
                 textFormat.Get(), D2D1::RectF(x, y, width, height), brush.Get());
         }
     }
+}
+
+// Load and decode image from file to WIC bitmap source
+ComPtr<IWICBitmapSource> App::LoadAndDecodeImage(IWICImagingFactory* wicFactory, WICPixelFormatGUID targetFormat) {
+    if (!m_currentImage || m_currentImage->filePath.empty()) return nullptr;
+
+    ComPtr<IWICBitmapDecoder> decoder;
+    HRESULT hr = wicFactory->CreateDecoderFromFilename(
+        m_currentImage->filePath.c_str(), nullptr, GENERIC_READ,
+        WICDecodeMetadataCacheOnDemand, &decoder);
+    if (FAILED(hr)) return nullptr;
+
+    ComPtr<IWICBitmapFrameDecode> frameDecode;
+    hr = decoder->GetFrame(0, &frameDecode);
+    if (FAILED(hr)) return nullptr;
+
+    ComPtr<IWICFormatConverter> converter;
+    hr = wicFactory->CreateFormatConverter(&converter);
+    if (FAILED(hr)) return nullptr;
+
+    hr = converter->Initialize(frameDecode.Get(), targetFormat,
+        WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom);
+    if (FAILED(hr)) return nullptr;
+
+    return converter;
+}
+
+// Apply rotation transformation to WIC bitmap source
+ComPtr<IWICBitmapSource> App::ApplyWICRotation(IWICImagingFactory* wicFactory, IWICBitmapSource* source) {
+    if (m_rotation == 0 || !source) return source;
+
+    ComPtr<IWICBitmapFlipRotator> rotator;
+    HRESULT hr = wicFactory->CreateBitmapFlipRotator(&rotator);
+    if (FAILED(hr)) return nullptr;
+
+    hr = rotator->Initialize(source, GetWICTransformForRotation(m_rotation));
+    if (FAILED(hr)) return nullptr;
+
+    return rotator;
+}
+
+// Apply crop transformation to WIC bitmap source
+ComPtr<IWICBitmapSource> App::ApplyWICCrop(IWICImagingFactory* wicFactory, IWICBitmapSource* source) {
+    if (!m_hasCrop || !source) return source;
+
+    ComPtr<IWICBitmapClipper> clipper;
+    HRESULT hr = wicFactory->CreateBitmapClipper(&clipper);
+    if (FAILED(hr)) return nullptr;
+
+    hr = clipper->Initialize(source, &m_appliedCrop);
+    if (FAILED(hr)) return nullptr;
+
+    return clipper;
+}
+
+// Create WIC bitmap from source and render markup overlays
+ComPtr<IWICBitmap> App::CreateWICBitmapWithOverlays(IWICImagingFactory* wicFactory, ID2D1Factory* d2dFactory, IWICBitmapSource* source) {
+    if (!source) return nullptr;
+
+    UINT width, height;
+    HRESULT hr = source->GetSize(&width, &height);
+    if (FAILED(hr) || width == 0 || height == 0) return nullptr;
+
+    ComPtr<IWICBitmap> wicBitmap;
+    hr = wicFactory->CreateBitmapFromSource(source, WICBitmapCacheOnLoad, &wicBitmap);
+    if (FAILED(hr)) return nullptr;
+
+    // Render markup and text overlays
+    ComPtr<ID2D1RenderTarget> renderTarget;
+    D2D1_RENDER_TARGET_PROPERTIES renderTargetProps = D2D1::RenderTargetProperties(
+        D2D1_RENDER_TARGET_TYPE_DEFAULT,
+        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED)
+    );
+    hr = d2dFactory->CreateWicBitmapRenderTarget(wicBitmap.Get(), renderTargetProps, &renderTarget);
+    if (FAILED(hr)) return nullptr;
+
+    renderTarget->BeginDraw();
+    RenderMarkupAndTextToTarget(renderTarget.Get(), static_cast<float>(width), static_cast<float>(height),
+        m_markupStrokes, m_textOverlays);
+    hr = renderTarget->EndDraw();
+    if (FAILED(hr)) return nullptr;
+
+    return wicBitmap;
+}
+
+// Create DIB (Device Independent Bitmap) for clipboard from WIC bitmap
+HGLOBAL App::CreateDIBFromBitmap(IWICBitmap* bitmap, UINT width, UINT height) {
+    if (!bitmap) return nullptr;
+
+    UINT stride = width * 4;
+    std::vector<BYTE> buffer(stride * height);
+    WICRect rcCopy = { 0, 0, (INT)width, (INT)height };
+    HRESULT hr = bitmap->CopyPixels(&rcCopy, stride, (UINT)buffer.size(), buffer.data());
+    if (FAILED(hr)) return nullptr;
+
+    // Flip buffer to bottom-up for Windows clipboard compatibility
+    std::vector<BYTE> flippedBuffer;
+    FlipBufferVertically(buffer, flippedBuffer, width, height, 4);
+
+    // Create DIB header
+    BITMAPINFOHEADER bi = {};
+    bi.biSize = sizeof(BITMAPINFOHEADER);
+    bi.biWidth = width;
+    bi.biHeight = height; // Positive = bottom-up
+    bi.biPlanes = 1;
+    bi.biBitCount = 32;
+    bi.biCompression = BI_RGB;
+
+    HGLOBAL hDib = GlobalAlloc(GMEM_MOVEABLE, sizeof(BITMAPINFOHEADER) + flippedBuffer.size());
+    if (!hDib) return nullptr;
+
+    void* pDib = GlobalLock(hDib);
+    if (pDib) {
+        memcpy(pDib, &bi, sizeof(BITMAPINFOHEADER));
+        memcpy(static_cast<BYTE*>(pDib) + sizeof(BITMAPINFOHEADER), flippedBuffer.data(), flippedBuffer.size());
+        GlobalUnlock(hDib);
+    }
+
+    return hDib;
+}
+
+// Encode WIC bitmap to PNG format for clipboard
+HGLOBAL App::EncodeBitmapToPNG(IWICImagingFactory* wicFactory, IWICBitmap* bitmap) {
+    if (!bitmap) return nullptr;
+
+    ComPtr<IStream> pngStream;
+    HRESULT hr = CreateStreamOnHGlobal(nullptr, TRUE, &pngStream);
+    if (FAILED(hr)) return nullptr;
+
+    ComPtr<IWICBitmapEncoder> encoder;
+    hr = wicFactory->CreateEncoder(GUID_ContainerFormatPng, nullptr, &encoder);
+    if (FAILED(hr)) return nullptr;
+
+    hr = encoder->Initialize(pngStream.Get(), WICBitmapEncoderNoCache);
+    if (FAILED(hr)) return nullptr;
+
+    ComPtr<IWICBitmapFrameEncode> frameEncode;
+    hr = encoder->CreateNewFrame(&frameEncode, nullptr);
+    if (FAILED(hr)) return nullptr;
+
+    hr = frameEncode->Initialize(nullptr);
+    if (FAILED(hr)) return nullptr;
+
+    UINT width, height;
+    bitmap->GetSize(&width, &height);
+    hr = frameEncode->SetSize(width, height);
+    if (FAILED(hr)) return nullptr;
+
+    WICPixelFormatGUID pixelFormat = GUID_WICPixelFormat32bppBGRA;
+    hr = frameEncode->SetPixelFormat(&pixelFormat);
+    if (FAILED(hr)) return nullptr;
+
+    hr = frameEncode->WriteSource(bitmap, nullptr);
+    if (FAILED(hr)) return nullptr;
+
+    hr = frameEncode->Commit();
+    if (FAILED(hr)) return nullptr;
+
+    hr = encoder->Commit();
+    if (FAILED(hr)) return nullptr;
+
+    // Get PNG data and copy to new HGLOBAL
+    HGLOBAL hPng = nullptr;
+    hr = GetHGlobalFromStream(pngStream.Get(), &hPng);
+    if (FAILED(hr)) return nullptr;
+
+    STATSTG stat;
+    pngStream->Stat(&stat, STATFLAG_NONAME);
+    SIZE_T pngSize = static_cast<SIZE_T>(stat.cbSize.QuadPart);
+
+    HGLOBAL hPngCopy = GlobalAlloc(GMEM_MOVEABLE, pngSize);
+    if (hPngCopy) {
+        void* pPngSrc = GlobalLock(hPng);
+        void* pPngDst = GlobalLock(hPngCopy);
+        if (pPngSrc && pPngDst) {
+            memcpy(pPngDst, pPngSrc, pngSize);
+        }
+        GlobalUnlock(hPng);
+        GlobalUnlock(hPngCopy);
+    }
+
+    return hPngCopy;
+}
+
+// Create HBITMAP from pixel buffer for Windows clipboard history
+HBITMAP App::CreateHBITMAPFromBuffer(const std::vector<BYTE>& buffer, UINT width, UINT height) {
+    // First flip the buffer to bottom-up format
+    std::vector<BYTE> flippedBuffer;
+    FlipBufferVertically(buffer, flippedBuffer, width, height, 4);
+
+    BITMAPINFO bmi = {};
+    bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bmi.bmiHeader.biWidth = width;
+    bmi.bmiHeader.biHeight = height; // Positive = bottom-up
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 32;
+    bmi.bmiHeader.biCompression = BI_RGB;
+
+    HDC hdc = GetDC(nullptr);
+    HBITMAP hBitmap = CreateDIBitmap(hdc, &bmi.bmiHeader, CBM_INIT,
+        flippedBuffer.data(), &bmi, DIB_RGB_COLORS);
+    ReleaseDC(nullptr, hdc);
+
+    return hBitmap;
 }
 
 bool App::Initialize(HINSTANCE hInstance, int nCmdShow, const std::wstring& initialFile) {
@@ -343,175 +556,33 @@ void App::CopyToClipboard() {
     auto d2dFactory = m_renderer->GetFactory();
     if (!wicFactory || !d2dFactory) return;
 
-    // Load from file and apply any transformations
-    ComPtr<IWICBitmapDecoder> decoder;
-    HRESULT hr = wicFactory->CreateDecoderFromFilename(
-        m_currentImage->filePath.c_str(), nullptr, GENERIC_READ,
-        WICDecodeMetadataCacheOnDemand, &decoder);
-    if (FAILED(hr)) return;
+    // Load, decode, and apply transformations
+    ComPtr<IWICBitmapSource> source = LoadAndDecodeImage(wicFactory, GUID_WICPixelFormat32bppPBGRA);
+    if (!source) return;
 
-    ComPtr<IWICBitmapFrameDecode> frameDecode;
-    hr = decoder->GetFrame(0, &frameDecode);
-    if (FAILED(hr)) return;
+    source = ApplyWICRotation(wicFactory, source.Get());
+    if (!source) return;
 
-    ComPtr<IWICFormatConverter> converter;
-    hr = wicFactory->CreateFormatConverter(&converter);
-    if (FAILED(hr)) return;
+    source = ApplyWICCrop(wicFactory, source.Get());
+    if (!source) return;
 
-    hr = converter->Initialize(frameDecode.Get(), GUID_WICPixelFormat32bppPBGRA,
-        WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom);
-    if (FAILED(hr)) return;
+    // Create bitmap with markup overlays
+    ComPtr<IWICBitmap> wicBitmap = CreateWICBitmapWithOverlays(wicFactory, d2dFactory, source.Get());
+    if (!wicBitmap) return;
 
-    ComPtr<IWICBitmapSource> source = converter;
-
-    // Apply rotation if needed (note: rotation auto-saves so m_rotation should be 0 after save)
-    if (m_rotation != 0) {
-        ComPtr<IWICBitmapFlipRotator> rotator;
-        hr = wicFactory->CreateBitmapFlipRotator(&rotator);
-        if (FAILED(hr)) return;
-
-        hr = rotator->Initialize(source.Get(), GetWICTransformForRotation(m_rotation));
-        if (FAILED(hr)) return;
-        source = rotator;
-    }
-
-    // Apply crop if needed
-    if (m_hasCrop) {
-        ComPtr<IWICBitmapClipper> clipper;
-        hr = wicFactory->CreateBitmapClipper(&clipper);
-        if (FAILED(hr)) return;
-
-        hr = clipper->Initialize(source.Get(), &m_appliedCrop);
-        if (FAILED(hr)) return;
-        source = clipper;
-    }
-
-    // Get final dimensions
     UINT width, height;
-    hr = source->GetSize(&width, &height);
-    if (FAILED(hr) || width == 0 || height == 0) return;
+    wicBitmap->GetSize(&width, &height);
 
-    // Create WIC bitmap for rendering
-    ComPtr<IWICBitmap> wicBitmap;
-    hr = wicFactory->CreateBitmapFromSource(source.Get(), WICBitmapCacheOnLoad, &wicBitmap);
-    if (FAILED(hr)) return;
+    // Create clipboard formats
+    HGLOBAL hDib = CreateDIBFromBitmap(wicBitmap.Get(), width, height);
+    HGLOBAL hPng = EncodeBitmapToPNG(wicFactory, wicBitmap.Get());
 
-    // Create a D2D render target for the WIC bitmap to draw markups
-    ComPtr<ID2D1RenderTarget> renderTarget;
-    D2D1_RENDER_TARGET_PROPERTIES renderTargetProps = D2D1::RenderTargetProperties(
-        D2D1_RENDER_TARGET_TYPE_DEFAULT,
-        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED)
-    );
-    hr = d2dFactory->CreateWicBitmapRenderTarget(wicBitmap.Get(), renderTargetProps, &renderTarget);
-    if (FAILED(hr)) return;
-
-    renderTarget->BeginDraw();
-    RenderMarkupAndTextToTarget(renderTarget.Get(), static_cast<float>(width), static_cast<float>(height),
-        m_markupStrokes, m_textOverlays);
-    hr = renderTarget->EndDraw();
-    if (FAILED(hr)) return;
-
-    // Copy pixels from WIC bitmap for DIB format
+    // Get pixel buffer for HBITMAP creation
     UINT stride = width * 4;
     std::vector<BYTE> buffer(stride * height);
     WICRect rcCopy = { 0, 0, (INT)width, (INT)height };
-    hr = wicBitmap->CopyPixels(&rcCopy, stride, (UINT)buffer.size(), buffer.data());
-    if (FAILED(hr)) return;
-
-    // Encode to PNG for browser compatibility
-    ComPtr<IStream> pngStream;
-    hr = CreateStreamOnHGlobal(nullptr, TRUE, &pngStream);
-    if (FAILED(hr)) return;
-
-    ComPtr<IWICBitmapEncoder> encoder;
-    hr = wicFactory->CreateEncoder(GUID_ContainerFormatPng, nullptr, &encoder);
-    if (FAILED(hr)) return;
-
-    hr = encoder->Initialize(pngStream.Get(), WICBitmapEncoderNoCache);
-    if (FAILED(hr)) return;
-
-    ComPtr<IWICBitmapFrameEncode> frameEncode;
-    hr = encoder->CreateNewFrame(&frameEncode, nullptr);
-    if (FAILED(hr)) return;
-
-    hr = frameEncode->Initialize(nullptr);
-    if (FAILED(hr)) return;
-
-    hr = frameEncode->SetSize(width, height);
-    if (FAILED(hr)) return;
-
-    WICPixelFormatGUID pixelFormat = GUID_WICPixelFormat32bppBGRA;
-    hr = frameEncode->SetPixelFormat(&pixelFormat);
-    if (FAILED(hr)) return;
-
-    hr = frameEncode->WriteSource(wicBitmap.Get(), nullptr);
-    if (FAILED(hr)) return;
-
-    hr = frameEncode->Commit();
-    if (FAILED(hr)) return;
-
-    hr = encoder->Commit();
-    if (FAILED(hr)) return;
-
-    // Get PNG data from stream
-    HGLOBAL hPng = nullptr;
-    hr = GetHGlobalFromStream(pngStream.Get(), &hPng);
-    if (FAILED(hr)) return;
-
-    STATSTG stat;
-    pngStream->Stat(&stat, STATFLAG_NONAME);
-    SIZE_T pngSize = static_cast<SIZE_T>(stat.cbSize.QuadPart);
-
-    // Flip buffer to bottom-up for Windows clipboard compatibility
-    std::vector<BYTE> flippedBuffer(buffer.size());
-    for (UINT y = 0; y < height; ++y) {
-        memcpy(&flippedBuffer[y * stride], &buffer[(height - 1 - y) * stride], stride);
-    }
-
-    // Create DIB for clipboard (bottom-up format)
-    BITMAPINFOHEADER bi = {};
-    bi.biSize = sizeof(BITMAPINFOHEADER);
-    bi.biWidth = width;
-    bi.biHeight = height; // Bottom-up (positive)
-    bi.biPlanes = 1;
-    bi.biBitCount = 32;
-    bi.biCompression = BI_RGB;
-
-    HGLOBAL hDib = GlobalAlloc(GMEM_MOVEABLE, sizeof(BITMAPINFOHEADER) + flippedBuffer.size());
-    if (!hDib) return;
-
-    void* pDib = GlobalLock(hDib);
-    if (pDib) {
-        memcpy(pDib, &bi, sizeof(BITMAPINFOHEADER));
-        memcpy(static_cast<BYTE*>(pDib) + sizeof(BITMAPINFOHEADER), flippedBuffer.data(), flippedBuffer.size());
-        GlobalUnlock(hDib);
-    }
-
-    // Copy PNG to new HGLOBAL (the stream's HGLOBAL can't be used directly)
-    HGLOBAL hPngCopy = GlobalAlloc(GMEM_MOVEABLE, pngSize);
-    if (hPngCopy) {
-        void* pPngSrc = GlobalLock(hPng);
-        void* pPngDst = GlobalLock(hPngCopy);
-        if (pPngSrc && pPngDst) {
-            memcpy(pPngDst, pPngSrc, pngSize);
-        }
-        GlobalUnlock(hPng);
-        GlobalUnlock(hPngCopy);
-    }
-
-    // Create HBITMAP for Windows clipboard history (bottom-up, positive height)
-    BITMAPINFO bmi = {};
-    bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-    bmi.bmiHeader.biWidth = width;
-    bmi.bmiHeader.biHeight = height; // Bottom-up (positive)
-    bmi.bmiHeader.biPlanes = 1;
-    bmi.bmiHeader.biBitCount = 32;
-    bmi.bmiHeader.biCompression = BI_RGB;
-
-    HDC hdc = GetDC(nullptr);
-    HBITMAP hBitmap = CreateDIBitmap(hdc, &bmi.bmiHeader, CBM_INIT,
-        flippedBuffer.data(), &bmi, DIB_RGB_COLORS);
-    ReleaseDC(nullptr, hdc);
+    wicBitmap->CopyPixels(&rcCopy, stride, (UINT)buffer.size(), buffer.data());
+    HBITMAP hBitmap = CreateHBITMAPFromBuffer(buffer, width, height);
 
     // Set clipboard with multiple formats
     if (OpenClipboard(m_window->GetHwnd())) {
@@ -519,27 +590,29 @@ void App::CopyToClipboard() {
 
         // PNG format for browsers and modern apps
         UINT pngFormat = RegisterClipboardFormatW(L"PNG");
-        if (pngFormat && hPngCopy) {
-            SetClipboardData(pngFormat, hPngCopy);
-            hPngCopy = nullptr; // Clipboard owns it now
+        if (pngFormat && hPng) {
+            SetClipboardData(pngFormat, hPng);
+            hPng = nullptr;
         }
 
         // BITMAP format for Windows clipboard history
         if (hBitmap) {
             SetClipboardData(CF_BITMAP, hBitmap);
-            hBitmap = nullptr; // Clipboard owns it now
+            hBitmap = nullptr;
         }
 
         // DIB format for traditional apps
-        SetClipboardData(CF_DIB, hDib);
-        hDib = nullptr; // Clipboard owns it now
+        if (hDib) {
+            SetClipboardData(CF_DIB, hDib);
+            hDib = nullptr;
+        }
 
         CloseClipboard();
     }
 
     // Clean up any handles not taken by clipboard
     if (hDib) GlobalFree(hDib);
-    if (hPngCopy) GlobalFree(hPngCopy);
+    if (hPng) GlobalFree(hPng);
     if (hBitmap) DeleteObject(hBitmap);
 }
 
@@ -745,120 +818,26 @@ void App::SaveImageAs() {
     }
 }
 
-bool App::SaveImageToFile(const std::wstring& filePath) {
-    if (!m_currentImage || m_currentImage->filePath.empty()) return false;
+// Get container format GUID from file extension
+GUID App::GetContainerFormatForExtension(const std::wstring& ext) {
+    std::wstring extLower = ext;
+    std::transform(extLower.begin(), extLower.end(), extLower.begin(), ::towlower);
 
-    auto wicFactory = m_renderer->GetWICFactory();
-    auto d2dFactory = m_renderer->GetFactory();
-    if (!wicFactory || !d2dFactory) return false;
-
-    // Determine output format
-    fs::path path(filePath);
-    std::wstring ext = path.extension().wstring();
-    std::transform(ext.begin(), ext.end(), ext.begin(), ::towlower);
-
-    GUID containerFormat;
-    if (ext == L".jpg" || ext == L".jpeg") {
-        containerFormat = GUID_ContainerFormatJpeg;
-    } else if (ext == L".bmp") {
-        containerFormat = GUID_ContainerFormatBmp;
-    } else {
-        containerFormat = GUID_ContainerFormatPng;
+    if (extLower == L".jpg" || extLower == L".jpeg") {
+        return GUID_ContainerFormatJpeg;
+    } else if (extLower == L".bmp") {
+        return GUID_ContainerFormatBmp;
     }
+    return GUID_ContainerFormatPng;
+}
 
-    bool hasOverlays = !m_markupStrokes.empty() || !m_textOverlays.empty();
+// Encode WIC bitmap and save to file
+bool App::EncodeAndSaveToFile(IWICImagingFactory* wicFactory, IWICBitmap* bitmap,
+                               const std::wstring& filePath, GUID containerFormat) {
+    if (!bitmap) return false;
 
-    // Use 32bppPBGRA (premultiplied) for D2D rendering when we have overlays
-    WICPixelFormatGUID targetPixelFormat = hasOverlays ?
-        GUID_WICPixelFormat32bppPBGRA :
-        ((containerFormat == GUID_ContainerFormatJpeg || containerFormat == GUID_ContainerFormatBmp) ?
-            GUID_WICPixelFormat24bppBGR : GUID_WICPixelFormat32bppBGRA);
-
-    // Load original image with WIC
-    ComPtr<IWICBitmapDecoder> decoder;
-    HRESULT hr = wicFactory->CreateDecoderFromFilename(
-        m_currentImage->filePath.c_str(), nullptr, GENERIC_READ,
-        WICDecodeMetadataCacheOnDemand, &decoder);
-    if (FAILED(hr)) return false;
-
-    ComPtr<IWICBitmapFrameDecode> frameDecode;
-    hr = decoder->GetFrame(0, &frameDecode);
-    if (FAILED(hr)) return false;
-
-    // Convert to target format
-    ComPtr<IWICFormatConverter> converter;
-    hr = wicFactory->CreateFormatConverter(&converter);
-    if (FAILED(hr)) return false;
-
-    hr = converter->Initialize(frameDecode.Get(), targetPixelFormat,
-        WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom);
-    if (FAILED(hr)) return false;
-
-    ComPtr<IWICBitmapSource> source = converter;
-
-    // Apply rotation if needed
-    if (m_rotation != 0) {
-        ComPtr<IWICBitmapFlipRotator> rotator;
-        hr = wicFactory->CreateBitmapFlipRotator(&rotator);
-        if (FAILED(hr)) return false;
-
-        hr = rotator->Initialize(source.Get(), GetWICTransformForRotation(m_rotation));
-        if (FAILED(hr)) return false;
-
-        source = rotator;
-    }
-
-    // Apply crop if needed
-    if (m_hasCrop) {
-        ComPtr<IWICBitmapClipper> clipper;
-        hr = wicFactory->CreateBitmapClipper(&clipper);
-        if (FAILED(hr)) return false;
-
-        hr = clipper->Initialize(source.Get(), &m_appliedCrop);
-        if (FAILED(hr)) return false;
-
-        source = clipper;
-    }
-
-    // Get final dimensions
-    UINT width, height;
-    source->GetSize(&width, &height);
-
-    // Always materialize to a WIC bitmap to avoid streaming issues
-    UINT bpp = (targetPixelFormat == GUID_WICPixelFormat32bppBGRA || targetPixelFormat == GUID_WICPixelFormat32bppPBGRA) ? 4 : 3;
-    UINT stride = ((width * bpp) + 3) & ~3;  // DWORD-aligned stride
-    std::vector<BYTE> buffer(stride * height);
-
-    WICRect rcCopy = { 0, 0, (INT)width, (INT)height };
-    hr = source->CopyPixels(&rcCopy, stride, (UINT)buffer.size(), buffer.data());
-    if (FAILED(hr)) return false;
-
-    // Create WIC bitmap from buffer
-    ComPtr<IWICBitmap> wicBitmap;
-    hr = wicFactory->CreateBitmapFromMemory(width, height, targetPixelFormat,
-        stride, (UINT)buffer.size(), buffer.data(), &wicBitmap);
-    if (FAILED(hr)) return false;
-
-    // Draw overlays if needed
-    if (hasOverlays) {
-        ComPtr<ID2D1RenderTarget> renderTarget;
-        D2D1_RENDER_TARGET_PROPERTIES renderTargetProps = D2D1::RenderTargetProperties(
-            D2D1_RENDER_TARGET_TYPE_DEFAULT,
-            D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED)
-        );
-        hr = d2dFactory->CreateWicBitmapRenderTarget(wicBitmap.Get(), renderTargetProps, &renderTarget);
-        if (FAILED(hr)) return false;
-
-        renderTarget->BeginDraw();
-        RenderMarkupAndTextToTarget(renderTarget.Get(), static_cast<float>(width), static_cast<float>(height),
-            m_markupStrokes, m_textOverlays);
-        hr = renderTarget->EndDraw();
-        if (FAILED(hr)) return false;
-    }
-
-    // Create encoder
     ComPtr<IWICBitmapEncoder> encoder;
-    hr = wicFactory->CreateEncoder(containerFormat, nullptr, &encoder);
+    HRESULT hr = wicFactory->CreateEncoder(containerFormat, nullptr, &encoder);
     if (FAILED(hr)) return false;
 
     ComPtr<IWICStream> stream;
@@ -890,14 +869,17 @@ bool App::SaveImageToFile(const std::wstring& filePath) {
     hr = frame->Initialize(props.Get());
     if (FAILED(hr)) return false;
 
+    UINT width, height;
+    bitmap->GetSize(&width, &height);
     hr = frame->SetSize(width, height);
     if (FAILED(hr)) return false;
 
-    WICPixelFormatGUID pixelFormat = targetPixelFormat;
+    WICPixelFormatGUID pixelFormat;
+    bitmap->GetPixelFormat(&pixelFormat);
     hr = frame->SetPixelFormat(&pixelFormat);
     if (FAILED(hr)) return false;
 
-    hr = frame->WriteSource(wicBitmap.Get(), nullptr);
+    hr = frame->WriteSource(bitmap, nullptr);
     if (FAILED(hr)) return false;
 
     hr = frame->Commit();
@@ -905,6 +887,35 @@ bool App::SaveImageToFile(const std::wstring& filePath) {
 
     hr = encoder->Commit();
     return SUCCEEDED(hr);
+}
+
+bool App::SaveImageToFile(const std::wstring& filePath) {
+    if (!m_currentImage || m_currentImage->filePath.empty()) return false;
+
+    auto wicFactory = m_renderer->GetWICFactory();
+    auto d2dFactory = m_renderer->GetFactory();
+    if (!wicFactory || !d2dFactory) return false;
+
+    // Determine output format from file extension
+    fs::path path(filePath);
+    GUID containerFormat = GetContainerFormatForExtension(path.extension().wstring());
+
+    // Load, decode, and apply transformations
+    // Use 32bppPBGRA for D2D rendering compatibility
+    ComPtr<IWICBitmapSource> source = LoadAndDecodeImage(wicFactory, GUID_WICPixelFormat32bppPBGRA);
+    if (!source) return false;
+
+    source = ApplyWICRotation(wicFactory, source.Get());
+    if (!source) return false;
+
+    source = ApplyWICCrop(wicFactory, source.Get());
+    if (!source) return false;
+
+    // Create bitmap with markup overlays
+    ComPtr<IWICBitmap> wicBitmap = CreateWICBitmapWithOverlays(wicFactory, d2dFactory, source.Get());
+    if (!wicBitmap) return false;
+
+    return EncodeAndSaveToFile(wicFactory, wicBitmap.Get(), filePath, containerFormat);
 }
 
 void App::RotateCW() {
@@ -1526,52 +1537,67 @@ void App::OnMouseWheel(int delta) {
     }
 }
 
-void App::OnMouseDown(int x, int y) {
-    if (m_editMode == EditMode::Crop) {
-        m_isCropDragging = true;
-        m_cropStartX = x;
-        m_cropStartY = y;
-        m_cropEndX = x;
-        m_cropEndY = y;
-        SetCapture(m_window->GetHwnd());
-    } else if (m_editMode == EditMode::Markup) {
-        float normX, normY;
-        if (ScreenToNormalizedImageCoords(x, y, normX, normY)) {
-            D2D1_RECT_F imageRect = m_renderer->GetScreenImageRect();
-            float imageW = imageRect.right - imageRect.left;
+// Mouse down handlers by mode
+void App::HandleCropMouseDown(int x, int y) {
+    m_isCropDragging = true;
+    m_cropStartX = x;
+    m_cropStartY = y;
+    m_cropEndX = x;
+    m_cropEndY = y;
+    SetCapture(m_window->GetHwnd());
+}
 
-            PushUndoState();
-            m_isDrawing = true;
-            MarkupStroke stroke;
-            stroke.color = D2D1::ColorF(D2D1::ColorF::Red);
-            stroke.width = MARKUP_STROKE_WIDTH_PIXELS / imageW;
-            stroke.points.push_back(D2D1::Point2F(normX, normY));
-            m_markupStrokes.push_back(stroke);
-            UpdateRendererMarkup();
-            SetCapture(m_window->GetHwnd());
-        }
-    } else if (m_editMode == EditMode::Text) {
-        float normX, normY;
-        if (ScreenToNormalizedImageCoords(x, y, normX, normY)) {
-            m_isEditingText = true;
-            m_editingText.clear();
-            m_editingTextX = normX;
-            m_editingTextY = normY;
-            UpdateRendererText();
-            InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
-        }
-    } else if (m_editMode == EditMode::Erase) {
-        // Start erasing - will continue to erase as mouse drags
-        PushUndoState();
-        m_isErasing = true;
-        SetCapture(m_window->GetHwnd());
-        // Erase at initial click position
-        EraseAtPoint(x, y);
-    } else {
-        m_isPanning = true;
-        m_lastMouseX = x;
-        m_lastMouseY = y;
-        SetCapture(m_window->GetHwnd());
+void App::HandleMarkupMouseDown(int x, int y) {
+    float normX, normY;
+    if (!ScreenToNormalizedImageCoords(x, y, normX, normY)) return;
+
+    D2D1_RECT_F imageRect = m_renderer->GetScreenImageRect();
+    float imageW = imageRect.right - imageRect.left;
+
+    PushUndoState();
+    m_isDrawing = true;
+    MarkupStroke stroke;
+    stroke.color = D2D1::ColorF(D2D1::ColorF::Red);
+    stroke.width = MARKUP_STROKE_WIDTH_PIXELS / imageW;
+    stroke.points.push_back(D2D1::Point2F(normX, normY));
+    m_markupStrokes.push_back(stroke);
+    UpdateRendererMarkup();
+    SetCapture(m_window->GetHwnd());
+}
+
+void App::HandleTextMouseDown(int x, int y) {
+    float normX, normY;
+    if (!ScreenToNormalizedImageCoords(x, y, normX, normY)) return;
+
+    m_isEditingText = true;
+    m_editingText.clear();
+    m_editingTextX = normX;
+    m_editingTextY = normY;
+    UpdateRendererText();
+    InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
+}
+
+void App::HandleEraseMouseDown(int x, int y) {
+    PushUndoState();
+    m_isErasing = true;
+    SetCapture(m_window->GetHwnd());
+    EraseAtPoint(x, y);
+}
+
+void App::HandlePanMouseDown(int x, int y) {
+    m_isPanning = true;
+    m_lastMouseX = x;
+    m_lastMouseY = y;
+    SetCapture(m_window->GetHwnd());
+}
+
+void App::OnMouseDown(int x, int y) {
+    switch (m_editMode) {
+    case EditMode::Crop:   HandleCropMouseDown(x, y);   break;
+    case EditMode::Markup: HandleMarkupMouseDown(x, y); break;
+    case EditMode::Text:   HandleTextMouseDown(x, y);   break;
+    case EditMode::Erase:  HandleEraseMouseDown(x, y);  break;
+    default:               HandlePanMouseDown(x, y);    break;
     }
 }
 
@@ -1592,37 +1618,51 @@ void App::OnMouseUp(int x, int y) {
     }
 }
 
+// Mouse move handlers by mode
+void App::HandleCropMouseMove(int x, int y) {
+    m_cropEndX = x;
+    m_cropEndY = y;
+    float left = static_cast<float>(std::min(m_cropStartX, m_cropEndX));
+    float top = static_cast<float>(std::min(m_cropStartY, m_cropEndY));
+    float right = static_cast<float>(std::max(m_cropStartX, m_cropEndX));
+    float bottom = static_cast<float>(std::max(m_cropStartY, m_cropEndY));
+    m_renderer->SetCropRect(D2D1::RectF(left, top, right, bottom));
+    InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
+}
+
+void App::HandleMarkupMouseMove(int x, int y) {
+    if (m_markupStrokes.empty()) return;
+
+    float normX, normY;
+    if (!ScreenToNormalizedImageCoords(x, y, normX, normY)) return;
+
+    m_markupStrokes.back().points.push_back(D2D1::Point2F(normX, normY));
+    UpdateRendererMarkup();
+    InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
+}
+
+void App::HandleEraseMouseMove(int x, int y) {
+    EraseAtPoint(x, y);
+}
+
+void App::HandlePanMouseMove(int x, int y) {
+    float dx = static_cast<float>(x - m_lastMouseX);
+    float dy = static_cast<float>(y - m_lastMouseY);
+    m_renderer->AddPan(dx, dy);
+    m_lastMouseX = x;
+    m_lastMouseY = y;
+    InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
+}
+
 void App::OnMouseMove(int x, int y) {
     if (m_isCropDragging) {
-        m_cropEndX = x;
-        m_cropEndY = y;
-        // Update crop rect in renderer
-        float left = static_cast<float>(std::min(m_cropStartX, m_cropEndX));
-        float top = static_cast<float>(std::min(m_cropStartY, m_cropEndY));
-        float right = static_cast<float>(std::max(m_cropStartX, m_cropEndX));
-        float bottom = static_cast<float>(std::max(m_cropStartY, m_cropEndY));
-        m_renderer->SetCropRect(D2D1::RectF(left, top, right, bottom));
-        InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
-    } else if (m_isDrawing && !m_markupStrokes.empty()) {
-        float normX, normY;
-        if (ScreenToNormalizedImageCoords(x, y, normX, normY)) {
-            m_markupStrokes.back().points.push_back(D2D1::Point2F(normX, normY));
-            UpdateRendererMarkup();
-            InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
-        }
+        HandleCropMouseMove(x, y);
+    } else if (m_isDrawing) {
+        HandleMarkupMouseMove(x, y);
     } else if (m_isErasing) {
-        // Continue erasing as mouse drags
-        EraseAtPoint(x, y);
+        HandleEraseMouseMove(x, y);
     } else if (m_isPanning) {
-        float dx = static_cast<float>(x - m_lastMouseX);
-        float dy = static_cast<float>(y - m_lastMouseY);
-
-        m_renderer->AddPan(dx, dy);
-
-        m_lastMouseX = x;
-        m_lastMouseY = y;
-
-        InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
+        HandlePanMouseMove(x, y);
     }
 }
 

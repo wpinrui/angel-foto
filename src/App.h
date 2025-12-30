@@ -80,6 +80,22 @@ private:
     // Image saving helper
     bool SaveImageToFile(const std::wstring& filePath);
 
+    // WIC transformation helpers (shared by clipboard and save operations)
+    ComPtr<IWICBitmapSource> LoadAndDecodeImage(IWICImagingFactory* wicFactory, WICPixelFormatGUID targetFormat);
+    ComPtr<IWICBitmapSource> ApplyWICRotation(IWICImagingFactory* wicFactory, IWICBitmapSource* source);
+    ComPtr<IWICBitmapSource> ApplyWICCrop(IWICImagingFactory* wicFactory, IWICBitmapSource* source);
+    ComPtr<IWICBitmap> CreateWICBitmapWithOverlays(IWICImagingFactory* wicFactory, ID2D1Factory* d2dFactory, IWICBitmapSource* source);
+
+    // Clipboard helpers
+    HGLOBAL CreateDIBFromBitmap(IWICBitmap* bitmap, UINT width, UINT height);
+    HGLOBAL EncodeBitmapToPNG(IWICImagingFactory* wicFactory, IWICBitmap* bitmap);
+    HBITMAP CreateHBITMAPFromBuffer(const std::vector<BYTE>& buffer, UINT width, UINT height);
+
+    // File encoding helpers
+    static GUID GetContainerFormatForExtension(const std::wstring& ext);
+    bool EncodeAndSaveToFile(IWICImagingFactory* wicFactory, IWICBitmap* bitmap,
+                             const std::wstring& filePath, GUID containerFormat);
+
     // Update renderer with current markup/text
     void UpdateRendererMarkup();
     void UpdateRendererText();
@@ -106,6 +122,17 @@ private:
     bool HandleZoomKey(UINT key, bool ctrl);
     bool HandleEditModeKey(UINT key, bool ctrl, bool shift);
     bool HandleFileOperationKey(UINT key, bool ctrl, bool shift);
+
+    // Mouse handlers by mode (extracted from OnMouseDown/OnMouseMove for clarity)
+    void HandleCropMouseDown(int x, int y);
+    void HandleMarkupMouseDown(int x, int y);
+    void HandleTextMouseDown(int x, int y);
+    void HandleEraseMouseDown(int x, int y);
+    void HandlePanMouseDown(int x, int y);
+    void HandleCropMouseMove(int x, int y);
+    void HandleMarkupMouseMove(int x, int y);
+    void HandleEraseMouseMove(int x, int y);
+    void HandlePanMouseMove(int x, int y);
 
     std::unique_ptr<Window> m_window;
     std::unique_ptr<Renderer> m_renderer;
