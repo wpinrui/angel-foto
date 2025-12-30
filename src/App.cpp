@@ -143,13 +143,7 @@ void App::LoadCurrentImage() {
     StopGifAnimation();
 
     // Reset all transformations when loading new image
-    m_rotation = 0;
-    m_renderer->SetRotation(0);
-    m_hasCrop = false;
-    m_appliedCrop = {};
-    m_markupStrokes.clear();
-    m_textOverlays.clear();
-    m_undoStack.clear();
+    ClearEditState();
 
     std::wstring filePath = m_navigator->GetCurrentFilePath();
     if (filePath.empty()) {
@@ -271,13 +265,13 @@ void App::DeleteCurrentFile() {
 
 void App::ZoomIn() {
     float zoom = m_renderer->GetZoom();
-    m_renderer->SetZoom(zoom * 1.25f);
+    m_renderer->SetZoom(zoom * ZOOM_FACTOR);
     InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
 }
 
 void App::ZoomOut() {
     float zoom = m_renderer->GetZoom();
-    m_renderer->SetZoom(zoom / 1.25f);
+    m_renderer->SetZoom(zoom / ZOOM_FACTOR);
     InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
 }
 
@@ -675,12 +669,8 @@ void App::SaveImage() {
 
         if (!SaveImageToFile(copyPath.wstring())) return;
 
-        // Clear edits since they're now saved
-        m_markupStrokes.clear();
-        m_textOverlays.clear();
-        m_hasCrop = false;
-        m_appliedCrop = {};
-        m_undoStack.clear();
+        // Clear edits since they're now saved (keep rotation since it wasn't saved)
+        ClearEditState(false);
         UpdateRendererMarkup();
         UpdateRendererText();
         InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
@@ -707,13 +697,7 @@ void App::SaveImage() {
         }
 
         // Reset transformations since they're now baked in
-        m_rotation = 0;
-        m_renderer->SetRotation(0);
-        m_hasCrop = false;
-        m_appliedCrop = {};
-        m_markupStrokes.clear();
-        m_textOverlays.clear();
-        m_undoStack.clear();
+        ClearEditState();
 
         // Reload the image
         m_navigator->SetCurrentFile(savedFilePath);
@@ -909,7 +893,7 @@ bool App::SaveImageToFile(const std::wstring& filePath) {
         VARIANT value;
         VariantInit(&value);
         value.vt = VT_R4;
-        value.fltVal = 0.9f;
+        value.fltVal = JPEG_SAVE_QUALITY;
         props->Write(1, &option, &value);
     }
 
@@ -1099,7 +1083,7 @@ void App::EraseAtPoint(int x, int y) {
         float dx = it->x - normX;
         float dy = it->y - normY;
         // Text hit box - check if click is near text origin
-        if (dx > -hitRadius && dx < 0.2f && dy > -hitRadius && dy < hitRadius * 2) {
+        if (dx > -hitRadius && dx < TEXT_HIT_BOX_WIDTH && dy > -hitRadius && dy < hitRadius * 2) {
             it = m_textOverlays.erase(it);
             erased = true;
         } else {
@@ -1159,6 +1143,18 @@ void App::Undo() {
 
 bool App::HasPendingEdits() const {
     return !m_markupStrokes.empty() || !m_textOverlays.empty() || m_hasCrop;
+}
+
+void App::ClearEditState(bool clearRotation) {
+    if (clearRotation) {
+        m_rotation = 0;
+        m_renderer->SetRotation(0);
+    }
+    m_hasCrop = false;
+    m_appliedCrop = {};
+    m_markupStrokes.clear();
+    m_textOverlays.clear();
+    m_undoStack.clear();
 }
 
 void App::ApplyCrop() {
@@ -1500,7 +1496,7 @@ void App::OnMouseDown(int x, int y) {
             m_isDrawing = true;
             MarkupStroke stroke;
             stroke.color = D2D1::ColorF(D2D1::ColorF::Red);
-            stroke.width = 3.0f / imageW;
+            stroke.width = MARKUP_STROKE_WIDTH_PIXELS / imageW;
             stroke.points.push_back(D2D1::Point2F(normX, normY));
             m_markupStrokes.push_back(stroke);
             UpdateRendererMarkup();

@@ -99,4 +99,8 @@ private:
 
     // Background color (dark)
     D2D1_COLOR_F m_backgroundColor = { 0.1f, 0.1f, 0.1f, 1.0f };
+
+    // Zoom limits
+    static constexpr float MIN_ZOOM = 0.1f;
+    static constexpr float MAX_ZOOM = 10.0f;
 };

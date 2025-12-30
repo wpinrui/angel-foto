@@ -84,7 +84,8 @@ private:
     // Coordinate transformation helper
     bool ScreenToNormalizedImageCoords(int screenX, int screenY, float& normX, float& normY) const;
 
-    // Undo support
+    // Edit state management
+    void ClearEditState(bool clearRotation = true);
     void PushUndoState();
     void Undo();
     bool HasPendingEdits() const;
@@ -125,6 +126,10 @@ private:
     static constexpr UINT DEFAULT_GIF_FRAME_DELAY_MS = 100;
     static constexpr float DEFAULT_TEXT_FONT_SIZE = 24.0f;
     static constexpr float ERASE_HIT_RADIUS_PIXELS = 30.0f;
+    static constexpr float ZOOM_FACTOR = 1.25f;
+    static constexpr float MARKUP_STROKE_WIDTH_PIXELS = 3.0f;
+    static constexpr float TEXT_HIT_BOX_WIDTH = 0.2f;
+    static constexpr float JPEG_SAVE_QUALITY = 0.9f;
 
     // Rotation state (0, 90, 180, 270 degrees)
     int m_rotation = 0;

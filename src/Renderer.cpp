@@ -227,7 +227,7 @@ void Renderer::ClearImage() {
 }
 
 void Renderer::SetZoom(float zoom) {
-    m_zoom = std::clamp(zoom, 0.1f, 10.0f);
+    m_zoom = std::clamp(zoom, MIN_ZOOM, MAX_ZOOM);
 }
 
 void Renderer::SetPan(float panX, float panY) {
