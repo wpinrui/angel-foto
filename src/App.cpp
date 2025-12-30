@@ -480,7 +480,7 @@ void App::LoadCurrentImage() {
 }
 
 void App::UpdateTitle() {
-    std::wstring title = L"angel-foto";
+    std::wstring title = Window::GetDefaultTitle();
 
     if (m_currentImage && !m_currentImage->filePath.empty()) {
         fs::path path(m_currentImage->filePath);
@@ -587,6 +587,17 @@ void App::ZoomOut() {
 void App::ResetZoom() {
     m_renderer->ResetView();
     InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
+}
+
+float App::CalculateActualSizeZoom() const {
+    if (!m_currentImage) return 1.0f;
+
+    float fitScaleX = static_cast<float>(m_window->GetWidth()) / m_currentImage->width;
+    float fitScaleY = static_cast<float>(m_window->GetHeight()) / m_currentImage->height;
+    float fitScale = std::min(fitScaleX, fitScaleY);
+
+    // Return zoom that counteracts the fit-to-window scale to show actual pixels
+    return 1.0f / fitScale;
 }
 
 void App::StartGifAnimation() {
@@ -1125,6 +1136,27 @@ bool App::ScreenToNormalizedImageCoords(int screenX, int screenY, float& normX, 
     return true;
 }
 
+// Check if a point is within hit radius of any point in a stroke
+static bool IsPointNearStroke(const App::MarkupStroke& stroke, float normX, float normY, float hitRadius) {
+    float hitRadiusSq = hitRadius * hitRadius;
+    for (const auto& pt : stroke.points) {
+        float dx = pt.x - normX;
+        float dy = pt.y - normY;
+        if (dx * dx + dy * dy < hitRadiusSq) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Check if a point is within the text overlay's hit box
+static bool IsPointNearText(const App::TextOverlay& text, float normX, float normY,
+                            float hitRadius, float textHitBoxWidth) {
+    float dx = text.x - normX;
+    float dy = text.y - normY;
+    return dx > -hitRadius && dx < textHitBoxWidth && dy > -hitRadius && dy < hitRadius * 2;
+}
+
 void App::EraseAtPoint(int x, int y) {
     float normX, normY;
     if (!ScreenToNormalizedImageCoords(x, y, normX, normY)) return;
@@ -1136,18 +1168,9 @@ void App::EraseAtPoint(int x, int y) {
 
     bool erased = false;
 
-    // Check strokes for hit - erase any stroke that intersects
+    // Erase strokes that intersect with click point
     for (auto it = m_markupStrokes.begin(); it != m_markupStrokes.end(); ) {
-        bool hit = false;
-        for (const auto& pt : it->points) {
-            float dx = pt.x - normX;
-            float dy = pt.y - normY;
-            if (dx * dx + dy * dy < hitRadius * hitRadius) {
-                hit = true;
-                break;
-            }
-        }
-        if (hit) {
+        if (IsPointNearStroke(*it, normX, normY, hitRadius)) {
             it = m_markupStrokes.erase(it);
             erased = true;
         } else {
@@ -1155,12 +1178,9 @@ void App::EraseAtPoint(int x, int y) {
         }
     }
 
-    // Check text overlays for hit
+    // Erase text overlays that intersect with click point
     for (auto it = m_textOverlays.begin(); it != m_textOverlays.end(); ) {
-        float dx = it->x - normX;
-        float dy = it->y - normY;
-        // Text hit box - check if click is near text origin
-        if (dx > -hitRadius && dx < TEXT_HIT_BOX_WIDTH && dy > -hitRadius && dy < hitRadius * 2) {
+        if (IsPointNearText(*it, normX, normY, hitRadius, TEXT_HIT_BOX_WIDTH)) {
             it = m_textOverlays.erase(it);
             erased = true;
         } else {
@@ -1398,9 +1418,7 @@ bool App::HandleZoomKey(UINT key, bool ctrl) {
         return true;
 
     case '1':
-        m_renderer->SetZoom(1.0f / (m_currentImage ?
-            std::min(static_cast<float>(m_window->GetWidth()) / m_currentImage->width,
-                     static_cast<float>(m_window->GetHeight()) / m_currentImage->height) : 1.0f));
+        m_renderer->SetZoom(CalculateActualSizeZoom());
         InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
         return true;
 

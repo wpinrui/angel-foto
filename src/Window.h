@@ -13,6 +13,9 @@ public:
 
     void SetTitle(const std::wstring& title);
     void ToggleFullscreen();
+
+    // Get default window title (static for use by other classes)
+    static std::wstring GetDefaultTitle() { return WINDOW_TITLE; }
     bool IsFullscreen() const { return m_isFullscreen; }
 
     // Get client area size in pixels

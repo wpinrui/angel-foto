@@ -65,6 +65,7 @@ private:
     void ZoomIn();
     void ZoomOut();
     void ResetZoom();
+    float CalculateActualSizeZoom() const;
 
     // Phase 2 features
     void CopyToClipboard();
