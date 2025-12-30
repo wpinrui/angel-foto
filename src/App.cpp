@@ -457,22 +457,28 @@ void App::CopyToClipboard() {
     pngStream->Stat(&stat, STATFLAG_NONAME);
     SIZE_T pngSize = static_cast<SIZE_T>(stat.cbSize.QuadPart);
 
-    // Create DIB for clipboard
+    // Flip buffer to bottom-up for Windows clipboard compatibility
+    std::vector<BYTE> flippedBuffer(buffer.size());
+    for (UINT y = 0; y < height; ++y) {
+        memcpy(&flippedBuffer[y * stride], &buffer[(height - 1 - y) * stride], stride);
+    }
+
+    // Create DIB for clipboard (bottom-up format)
     BITMAPINFOHEADER bi = {};
     bi.biSize = sizeof(BITMAPINFOHEADER);
     bi.biWidth = width;
-    bi.biHeight = -(int)height; // Top-down
+    bi.biHeight = height; // Bottom-up (positive)
     bi.biPlanes = 1;
     bi.biBitCount = 32;
     bi.biCompression = BI_RGB;
 
-    HGLOBAL hDib = GlobalAlloc(GMEM_MOVEABLE, sizeof(BITMAPINFOHEADER) + buffer.size());
+    HGLOBAL hDib = GlobalAlloc(GMEM_MOVEABLE, sizeof(BITMAPINFOHEADER) + flippedBuffer.size());
     if (!hDib) return;
 
     void* pDib = GlobalLock(hDib);
     if (pDib) {
         memcpy(pDib, &bi, sizeof(BITMAPINFOHEADER));
-        memcpy(static_cast<BYTE*>(pDib) + sizeof(BITMAPINFOHEADER), buffer.data(), buffer.size());
+        memcpy(static_cast<BYTE*>(pDib) + sizeof(BITMAPINFOHEADER), flippedBuffer.data(), flippedBuffer.size());
         GlobalUnlock(hDib);
     }
 
@@ -488,18 +494,18 @@ void App::CopyToClipboard() {
         GlobalUnlock(hPngCopy);
     }
 
-    // Create HBITMAP for Windows clipboard history
+    // Create HBITMAP for Windows clipboard history (bottom-up, positive height)
     BITMAPINFO bmi = {};
     bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
     bmi.bmiHeader.biWidth = width;
-    bmi.bmiHeader.biHeight = -(int)height; // Top-down
+    bmi.bmiHeader.biHeight = height; // Bottom-up (positive)
     bmi.bmiHeader.biPlanes = 1;
     bmi.bmiHeader.biBitCount = 32;
     bmi.bmiHeader.biCompression = BI_RGB;
 
     HDC hdc = GetDC(nullptr);
     HBITMAP hBitmap = CreateDIBitmap(hdc, &bmi.bmiHeader, CBM_INIT,
-        buffer.data(), &bmi, DIB_RGB_COLORS);
+        flippedBuffer.data(), &bmi, DIB_RGB_COLORS);
     ReleaseDC(nullptr, hdc);
 
     // Set clipboard with multiple formats
