@@ -488,6 +488,20 @@ void App::CopyToClipboard() {
         GlobalUnlock(hPngCopy);
     }
 
+    // Create HBITMAP for Windows clipboard history
+    BITMAPINFO bmi = {};
+    bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bmi.bmiHeader.biWidth = width;
+    bmi.bmiHeader.biHeight = -(int)height; // Top-down
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 32;
+    bmi.bmiHeader.biCompression = BI_RGB;
+
+    HDC hdc = GetDC(nullptr);
+    HBITMAP hBitmap = CreateDIBitmap(hdc, &bmi.bmiHeader, CBM_INIT,
+        buffer.data(), &bmi, DIB_RGB_COLORS);
+    ReleaseDC(nullptr, hdc);
+
     // Set clipboard with multiple formats
     if (OpenClipboard(m_window->GetHwnd())) {
         EmptyClipboard();
@@ -497,6 +511,12 @@ void App::CopyToClipboard() {
         if (pngFormat && hPngCopy) {
             SetClipboardData(pngFormat, hPngCopy);
             hPngCopy = nullptr; // Clipboard owns it now
+        }
+
+        // BITMAP format for Windows clipboard history
+        if (hBitmap) {
+            SetClipboardData(CF_BITMAP, hBitmap);
+            hBitmap = nullptr; // Clipboard owns it now
         }
 
         // DIB format for traditional apps
@@ -509,6 +529,7 @@ void App::CopyToClipboard() {
     // Clean up any handles not taken by clipboard
     if (hDib) GlobalFree(hDib);
     if (hPngCopy) GlobalFree(hPngCopy);
+    if (hBitmap) DeleteObject(hBitmap);
 }
 
 void App::SetAsWallpaper() {
