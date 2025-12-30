@@ -524,7 +524,7 @@ void App::StartGifAnimation() {
     m_currentImage->currentFrame = 0;
 
     UINT delay = m_currentImage->frameDelays.empty() ? DEFAULT_GIF_FRAME_DELAY_MS : m_currentImage->frameDelays[0];
-    m_gifTimerId = SetTimer(m_window->GetHwnd(), 1, delay, GifTimerProc);
+    m_gifTimerId = SetTimer(m_window->GetHwnd(), GIF_TIMER_ID, delay, GifTimerProc);
 }
 
 void App::StopGifAnimation() {
@@ -559,7 +559,7 @@ void App::AdvanceGifFrame() {
     }
 
     KillTimer(m_window->GetHwnd(), m_gifTimerId);
-    m_gifTimerId = SetTimer(m_window->GetHwnd(), 1, delay, GifTimerProc);
+    m_gifTimerId = SetTimer(m_window->GetHwnd(), GIF_TIMER_ID, delay, GifTimerProc);
 }
 
 void CALLBACK App::GifTimerProc(HWND hwnd, UINT msg, UINT_PTR id, DWORD time) {
@@ -628,6 +628,40 @@ void App::CopyToClipboard() {
     if (hBitmap) DeleteObject(hBitmap);
 }
 
+// Helper to show file dialog and get the selected path
+// Returns empty string if cancelled or failed
+static std::wstring ShowFileOpenDialog(HWND hwnd, bool pickFolder,
+    const COMDLG_FILTERSPEC* filters = nullptr, UINT filterCount = 0)
+{
+    ComPtr<IFileOpenDialog> dialog;
+    HRESULT hr = CoCreateInstance(CLSID_FileOpenDialog, nullptr,
+        CLSCTX_ALL, IID_PPV_ARGS(&dialog));
+    if (FAILED(hr)) return L"";
+
+    if (pickFolder) {
+        DWORD options;
+        dialog->GetOptions(&options);
+        dialog->SetOptions(options | FOS_PICKFOLDERS);
+    } else if (filters && filterCount > 0) {
+        dialog->SetFileTypes(filterCount, filters);
+    }
+
+    hr = dialog->Show(hwnd);
+    if (FAILED(hr)) return L"";
+
+    ComPtr<IShellItem> item;
+    hr = dialog->GetResult(&item);
+    if (FAILED(hr)) return L"";
+
+    PWSTR path;
+    hr = item->GetDisplayName(SIGDN_FILESYSPATH, &path);
+    if (FAILED(hr)) return L"";
+
+    std::wstring result(path);
+    CoTaskMemFree(path);
+    return result;
+}
+
 void App::SetAsWallpaper() {
     if (!m_currentImage || m_currentImage->filePath.empty()) return;
 
@@ -650,55 +684,22 @@ void App::SetAsWallpaper() {
 }
 
 void App::OpenFileDialog() {
-    ComPtr<IFileOpenDialog> dialog;
-    HRESULT hr = CoCreateInstance(CLSID_FileOpenDialog, nullptr,
-        CLSCTX_ALL, IID_PPV_ARGS(&dialog));
-    if (FAILED(hr)) return;
-
-    dialog->SetFileTypes(ARRAYSIZE(OPEN_FILE_FILTERS), OPEN_FILE_FILTERS);
-
-    hr = dialog->Show(m_window->GetHwnd());
-    if (SUCCEEDED(hr)) {
-        ComPtr<IShellItem> item;
-        hr = dialog->GetResult(&item);
-        if (SUCCEEDED(hr)) {
-            PWSTR filePath;
-            hr = item->GetDisplayName(SIGDN_FILESYSPATH, &filePath);
-            if (SUCCEEDED(hr)) {
-                OpenFile(filePath);
-                CoTaskMemFree(filePath);
-            }
-        }
+    std::wstring filePath = ShowFileOpenDialog(m_window->GetHwnd(), false,
+        OPEN_FILE_FILTERS, ARRAYSIZE(OPEN_FILE_FILTERS));
+    if (!filePath.empty()) {
+        OpenFile(filePath);
     }
 }
 
 void App::OpenFolderDialog() {
-    ComPtr<IFileOpenDialog> dialog;
-    HRESULT hr = CoCreateInstance(CLSID_FileOpenDialog, nullptr,
-        CLSCTX_ALL, IID_PPV_ARGS(&dialog));
-    if (FAILED(hr)) return;
+    std::wstring folderPath = ShowFileOpenDialog(m_window->GetHwnd(), true);
+    if (folderPath.empty()) return;
 
-    DWORD options;
-    dialog->GetOptions(&options);
-    dialog->SetOptions(options | FOS_PICKFOLDERS);
-
-    hr = dialog->Show(m_window->GetHwnd());
-    if (SUCCEEDED(hr)) {
-        ComPtr<IShellItem> item;
-        hr = dialog->GetResult(&item);
-        if (SUCCEEDED(hr)) {
-            PWSTR folderPath;
-            hr = item->GetDisplayName(SIGDN_FILESYSPATH, &folderPath);
-            if (SUCCEEDED(hr)) {
-                // Find first image in folder
-                for (const auto& entry : fs::directory_iterator(folderPath)) {
-                    if (ImageLoader::IsSupportedFormat(entry.path().wstring())) {
-                        OpenFile(entry.path().wstring());
-                        break;
-                    }
-                }
-                CoTaskMemFree(folderPath);
-            }
+    // Find first image in folder
+    for (const auto& entry : fs::directory_iterator(folderPath)) {
+        if (ImageLoader::IsSupportedFormat(entry.path().wstring())) {
+            OpenFile(entry.path().wstring());
+            break;
         }
     }
 }
@@ -803,12 +804,7 @@ void App::SaveImageAs() {
     dialog->SetFileTypes(ARRAYSIZE(SAVE_FILE_FILTERS), SAVE_FILE_FILTERS);
 
     // Set default filter based on original extension
-    std::wstring extLower = ToLowerCase(srcExt);
-    UINT filterIndex = 1; // Default to PNG
-    if (extLower == L".jpg" || extLower == L".jpeg") filterIndex = 2;
-    else if (extLower == L".bmp") filterIndex = 3;
-    else if (extLower == L".png") filterIndex = 1;
-    dialog->SetFileTypeIndex(filterIndex);
+    dialog->SetFileTypeIndex(GetSaveFilterIndexForExtension(srcExt));
 
     dialog->SetDefaultExtension(srcExt.empty() ? L"png" : srcExt.c_str() + 1);
     dialog->SetFileName(srcPath.stem().wstring().c_str());
@@ -839,6 +835,18 @@ GUID App::GetContainerFormatForExtension(const std::wstring& ext) {
         return GUID_ContainerFormatBmp;
     }
     return GUID_ContainerFormatPng;
+}
+
+// Get save dialog filter index from file extension
+UINT App::GetSaveFilterIndexForExtension(const std::wstring& ext) {
+    std::wstring extLower = ToLowerCase(ext);
+
+    if (extLower == L".jpg" || extLower == L".jpeg") {
+        return SAVE_FILTER_JPEG_INDEX;
+    } else if (extLower == L".bmp") {
+        return SAVE_FILTER_BMP_INDEX;
+    }
+    return SAVE_FILTER_PNG_INDEX;
 }
 
 // Encode WIC bitmap and save to file

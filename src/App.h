@@ -105,6 +105,7 @@ private:
 
     // File encoding helpers
     static GUID GetContainerFormatForExtension(const std::wstring& ext);
+    static UINT GetSaveFilterIndexForExtension(const std::wstring& ext);
     bool EncodeAndSaveToFile(IWICImagingFactory* wicFactory, IWICBitmap* bitmap,
                              const std::wstring& filePath, GUID containerFormat);
 
@@ -177,7 +178,8 @@ private:
     DWORD m_lastNavigateTime = 0;
     static const DWORD NAVIGATE_DELAY_MS = 50;  // Fast navigation when holding key
 
-    // Rendering constants
+    // GIF animation constants
+    static constexpr UINT_PTR GIF_TIMER_ID = 1;
     static constexpr UINT DEFAULT_GIF_FRAME_DELAY_MS = 100;
     static constexpr float DEFAULT_TEXT_FONT_SIZE = 24.0f;
     static constexpr float ERASE_HIT_RADIUS_PIXELS = 30.0f;
@@ -213,6 +215,11 @@ private:
         { L"BMP Image", L"*.bmp" },
         { L"All Files", L"*.*" }
     };
+
+    // Save dialog filter indices (1-indexed for SetFileTypeIndex)
+    static constexpr UINT SAVE_FILTER_PNG_INDEX = 1;
+    static constexpr UINT SAVE_FILTER_JPEG_INDEX = 2;
+    static constexpr UINT SAVE_FILTER_BMP_INDEX = 3;
 
     // Rotation state (0, 90, 180, 270 degrees)
     int m_rotation = 0;

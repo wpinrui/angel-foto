@@ -116,6 +116,10 @@ private:
     // Text rendering constants
     static constexpr wchar_t DEFAULT_FONT_NAME[] = L"Segoe UI";
     static constexpr wchar_t DEFAULT_LOCALE[] = L"en-us";
+    static constexpr float TEXT_DRAW_MAX_WIDTH = 1000.0f;
+    static constexpr float TEXT_DRAW_MAX_HEIGHT = 200.0f;
+
+    // Crop overlay constants
     static constexpr float CROP_DIM_OPACITY = 0.5f;
     static constexpr float CROP_BORDER_WIDTH = 2.0f;
 };

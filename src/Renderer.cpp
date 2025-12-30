@@ -4,6 +4,14 @@
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
 
+// Helper to create render target bitmap properties (used by CreateDeviceResources and Resize)
+static D2D1_BITMAP_PROPERTIES1 CreateRenderTargetBitmapProperties() {
+    return D2D1::BitmapProperties1(
+        D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
+        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_IGNORE)
+    );
+}
+
 Renderer::Renderer() {}
 
 Renderer::~Renderer() {
@@ -155,10 +163,7 @@ void Renderer::CreateDeviceResources() {
     hr = m_swapChain->GetBuffer(0, IID_PPV_ARGS(&dxgiSurface));
     THROW_IF_FAILED(hr);
 
-    D2D1_BITMAP_PROPERTIES1 bitmapProperties = D2D1::BitmapProperties1(
-        D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
-        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_IGNORE)
-    );
+    D2D1_BITMAP_PROPERTIES1 bitmapProperties = CreateRenderTargetBitmapProperties();
 
     hr = m_deviceContext->CreateBitmapFromDxgiSurface(
         dxgiSurface.Get(),
@@ -201,10 +206,7 @@ void Renderer::Resize(int width, int height) {
         hr = m_swapChain->GetBuffer(0, IID_PPV_ARGS(&dxgiSurface));
         THROW_IF_FAILED(hr);
 
-        D2D1_BITMAP_PROPERTIES1 bitmapProperties = D2D1::BitmapProperties1(
-            D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
-            D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_IGNORE)
-        );
+        D2D1_BITMAP_PROPERTIES1 bitmapProperties = CreateRenderTargetBitmapProperties();
 
         hr = m_deviceContext->CreateBitmapFromDxgiSurface(
             dxgiSurface.Get(),
@@ -385,7 +387,7 @@ void Renderer::RenderTextOverlays(const D2D1_RECT_F& screenRect) {
         float screenX = screenRect.left + text.x * screenW;
         float screenY = screenRect.top + text.y * screenH;
         m_deviceContext->DrawText(text.text.c_str(), (UINT32)text.text.length(),
-            textFormat.Get(), D2D1::RectF(screenX, screenY, screenX + 1000, screenY + 200), brush.Get());
+            textFormat.Get(), D2D1::RectF(screenX, screenY, screenX + TEXT_DRAW_MAX_WIDTH, screenY + TEXT_DRAW_MAX_HEIGHT), brush.Get());
     }
 }
 
