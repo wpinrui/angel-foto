@@ -36,9 +36,35 @@ static WICBitmapTransformOptions GetWICTransformForRotation(int rotation) {
     }
 }
 
+// Crop transformation parameters for coordinate conversion
+struct CropTransformParams {
+    float origW, origH;     // Original image dimensions
+    int cropX, cropY;       // Crop rectangle origin
+    int cropW, cropH;       // Crop rectangle dimensions
+};
+
+// Check if a normalized point (in original image space) falls inside the crop rectangle
+static bool IsPointInCropRect(float normX, float normY, const CropTransformParams& params) {
+    float pixelX = normX * params.origW;
+    float pixelY = normY * params.origH;
+    return pixelX >= params.cropX && pixelX <= params.cropX + params.cropW &&
+           pixelY >= params.cropY && pixelY <= params.cropY + params.cropH;
+}
+
+// Transform a normalized point from original image space to cropped image space
+// Returns the new normalized coordinates
+static D2D1_POINT_2F TransformPointToCroppedSpace(float normX, float normY, const CropTransformParams& params) {
+    float pixelX = normX * params.origW;
+    float pixelY = normY * params.origH;
+    return D2D1::Point2F(
+        (pixelX - params.cropX) / params.cropW,
+        (pixelY - params.cropY) / params.cropH
+    );
+}
+
 // Helper to flip buffer from top-down to bottom-up for Windows DIB format
 static void FlipBufferVertically(const std::vector<BYTE>& src, std::vector<BYTE>& dst, UINT width, UINT height) {
-    UINT stride = width * App::RGBA_BYTES_PER_PIXEL;
+    UINT stride = App::GetBitmapStride(width);
     dst.resize(src.size());
     for (UINT y = 0; y < height; ++y) {
         memcpy(&dst[y * stride], &src[(height - 1 - y) * stride], stride);
@@ -76,9 +102,9 @@ static void RenderMarkupAndTextToTarget(
         for (const auto& text : texts) {
             ComPtr<IDWriteTextFormat> textFormat;
             float fontSize = text.fontSize * width;
-            dwriteFactory->CreateTextFormat(App::DEFAULT_FONT_NAME, nullptr,
+            dwriteFactory->CreateTextFormat(Renderer::DEFAULT_FONT_NAME, nullptr,
                 DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
-                fontSize, App::DEFAULT_LOCALE, &textFormat);
+                fontSize, Renderer::DEFAULT_LOCALE, &textFormat);
             if (!textFormat) continue;
 
             ComPtr<ID2D1SolidColorBrush> brush;
@@ -205,7 +231,7 @@ ComPtr<IWICBitmap> App::GetTransformedImageWithOverlays(IWICImagingFactory* wicF
 HGLOBAL App::CreateDIBFromBitmap(IWICBitmap* bitmap, UINT width, UINT height) {
     if (!bitmap) return nullptr;
 
-    UINT stride = width * RGBA_BYTES_PER_PIXEL;
+    UINT stride = GetBitmapStride(width);
     std::vector<BYTE> buffer(stride * height);
     WICRect rcCopy = { 0, 0, (INT)width, (INT)height };
     HRESULT hr = bitmap->CopyPixels(&rcCopy, stride, (UINT)buffer.size(), buffer.data());
@@ -600,7 +626,7 @@ void App::CopyToClipboard() {
     HGLOBAL hPng = EncodeBitmapToPNG(wicFactory, wicBitmap.Get());
 
     // Get pixel buffer for HBITMAP creation
-    UINT stride = width * RGBA_BYTES_PER_PIXEL;
+    UINT stride = GetBitmapStride(width);
     std::vector<BYTE> buffer(stride * height);
     WICRect rcCopy = { 0, 0, (INT)width, (INT)height };
     wicBitmap->CopyPixels(&rcCopy, stride, (UINT)buffer.size(), buffer.data());
@@ -1182,40 +1208,32 @@ void App::ApplyCrop() {
     D2D1_RECT_F cropRect = m_renderer->GetCropRectInImageCoords();
     if (cropRect.right <= cropRect.left || cropRect.bottom <= cropRect.top) return;
 
-    int cropX = static_cast<int>(cropRect.left);
-    int cropY = static_cast<int>(cropRect.top);
-    int cropW = static_cast<int>(cropRect.right - cropRect.left);
-    int cropH = static_cast<int>(cropRect.bottom - cropRect.top);
+    // Set up crop transformation parameters
+    CropTransformParams params;
+    params.origW = static_cast<float>(m_currentImage->width);
+    params.origH = static_cast<float>(m_currentImage->height);
+    params.cropX = static_cast<int>(cropRect.left);
+    params.cropY = static_cast<int>(cropRect.top);
+    params.cropW = static_cast<int>(cropRect.right - cropRect.left);
+    params.cropH = static_cast<int>(cropRect.bottom - cropRect.top);
 
-    if (cropW <= 0 || cropH <= 0) return;
+    if (params.cropW <= 0 || params.cropH <= 0) return;
 
-    // Get original image size before crop
-    float origW = static_cast<float>(m_currentImage->width);
-    float origH = static_cast<float>(m_currentImage->height);
+    float scaleFactor = params.origW / params.cropW;
 
     // Transform markup strokes to new cropped coordinate space
     std::vector<MarkupStroke> transformedStrokes;
     for (const auto& stroke : m_markupStrokes) {
         MarkupStroke newStroke;
         newStroke.color = stroke.color;
-        newStroke.width = stroke.width * (origW / cropW);  // Adjust width for new scale
+        newStroke.width = stroke.width * scaleFactor;
 
         for (const auto& pt : stroke.points) {
-            // Convert from normalized to pixel coords
-            float pixelX = pt.x * origW;
-            float pixelY = pt.y * origH;
-
-            // Check if point is inside crop rect
-            if (pixelX >= cropX && pixelX <= cropX + cropW &&
-                pixelY >= cropY && pixelY <= cropY + cropH) {
-                // Transform to new normalized coords
-                float newNormX = (pixelX - cropX) / cropW;
-                float newNormY = (pixelY - cropY) / cropH;
-                newStroke.points.push_back(D2D1::Point2F(newNormX, newNormY));
+            if (IsPointInCropRect(pt.x, pt.y, params)) {
+                newStroke.points.push_back(TransformPointToCroppedSpace(pt.x, pt.y, params));
             }
         }
 
-        // Only keep strokes that have at least 2 points after cropping
         if (newStroke.points.size() >= 2) {
             transformedStrokes.push_back(newStroke);
         }
@@ -1225,17 +1243,12 @@ void App::ApplyCrop() {
     // Transform text overlays to new cropped coordinate space
     std::vector<TextOverlay> transformedTexts;
     for (const auto& text : m_textOverlays) {
-        // Convert from normalized to pixel coords
-        float pixelX = text.x * origW;
-        float pixelY = text.y * origH;
-
-        // Check if text origin is inside crop rect
-        if (pixelX >= cropX && pixelX <= cropX + cropW &&
-            pixelY >= cropY && pixelY <= cropY + cropH) {
+        if (IsPointInCropRect(text.x, text.y, params)) {
+            D2D1_POINT_2F newPos = TransformPointToCroppedSpace(text.x, text.y, params);
             TextOverlay newText = text;
-            newText.x = (pixelX - cropX) / cropW;
-            newText.y = (pixelY - cropY) / cropH;
-            newText.fontSize = text.fontSize * (origW / cropW);  // Adjust font size
+            newText.x = newPos.x;
+            newText.y = newPos.y;
+            newText.fontSize = text.fontSize * scaleFactor;
             transformedTexts.push_back(newText);
         }
     }
@@ -1243,7 +1256,7 @@ void App::ApplyCrop() {
 
     // Store crop for saving
     m_hasCrop = true;
-    m_appliedCrop = { cropX, cropY, cropW, cropH };
+    m_appliedCrop = { params.cropX, params.cropY, params.cropW, params.cropH };
 
     auto deviceContext = m_renderer->GetDeviceContext();
 
@@ -1254,18 +1267,19 @@ void App::ApplyCrop() {
     );
 
     ComPtr<ID2D1Bitmap1> croppedBitmap;
-    HRESULT hr = deviceContext->CreateBitmap(D2D1::SizeU(cropW, cropH), nullptr, 0, bitmapProps, &croppedBitmap);
+    HRESULT hr = deviceContext->CreateBitmap(D2D1::SizeU(params.cropW, params.cropH), nullptr, 0, bitmapProps, &croppedBitmap);
     if (FAILED(hr)) return;
 
     D2D1_POINT_2U destPoint = {0, 0};
-    D2D1_RECT_U srcRect = {(UINT32)cropX, (UINT32)cropY, (UINT32)(cropX + cropW), (UINT32)(cropY + cropH)};
+    D2D1_RECT_U srcRect = {(UINT32)params.cropX, (UINT32)params.cropY,
+                           (UINT32)(params.cropX + params.cropW), (UINT32)(params.cropY + params.cropH)};
     hr = croppedBitmap->CopyFromBitmap(&destPoint, m_currentImage->bitmap.Get(), &srcRect);
     if (FAILED(hr)) return;
 
     // Update current image
     m_currentImage->bitmap = croppedBitmap;
-    m_currentImage->width = cropW;
-    m_currentImage->height = cropH;
+    m_currentImage->width = params.cropW;
+    m_currentImage->height = params.cropH;
 
     m_renderer->SetImage(m_currentImage->bitmap);
     UpdateRendererMarkup();

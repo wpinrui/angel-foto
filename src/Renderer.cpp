@@ -12,6 +12,11 @@ static D2D1_BITMAP_PROPERTIES1 CreateRenderTargetBitmapProperties() {
     );
 }
 
+// Helper to clamp a value to bounds [0, max]
+static float ClampToBounds(float value, float maxValue) {
+    return std::max(0.0f, std::min(value, maxValue));
+}
+
 Renderer::Renderer() {}
 
 Renderer::~Renderer() {
@@ -300,10 +305,12 @@ D2D1_RECT_F Renderer::GetCropRectInImageCoords() const {
     result.bottom = (m_cropRect.bottom - imageRect.top) * scaleY;
 
     // Clamp to image bounds
-    result.left = std::max(0.0f, std::min(result.left, m_currentImage->GetSize().width));
-    result.top = std::max(0.0f, std::min(result.top, m_currentImage->GetSize().height));
-    result.right = std::max(0.0f, std::min(result.right, m_currentImage->GetSize().width));
-    result.bottom = std::max(0.0f, std::min(result.bottom, m_currentImage->GetSize().height));
+    float imgWidth = m_currentImage->GetSize().width;
+    float imgHeight = m_currentImage->GetSize().height;
+    result.left = ClampToBounds(result.left, imgWidth);
+    result.top = ClampToBounds(result.top, imgHeight);
+    result.right = ClampToBounds(result.right, imgWidth);
+    result.bottom = ClampToBounds(result.bottom, imgHeight);
 
     return result;
 }

@@ -34,12 +34,11 @@ public:
     using MarkupStroke = Renderer::MarkupStroke;
     using TextOverlay = Renderer::TextOverlay;
 
-    // Text rendering constants (public for helper function access)
-    static constexpr wchar_t DEFAULT_FONT_NAME[] = L"Segoe UI";
-    static constexpr wchar_t DEFAULT_LOCALE[] = L"en-us";
-
     // Image format constants (public for helper function access)
     static constexpr UINT RGBA_BYTES_PER_PIXEL = 4;
+
+    // Helper to calculate bitmap stride (width * bytes per pixel)
+    static UINT GetBitmapStride(UINT width) { return width * RGBA_BYTES_PER_PIXEL; }
 
     // EditState struct (public because used in public-accessible helper methods)
     struct EditState {

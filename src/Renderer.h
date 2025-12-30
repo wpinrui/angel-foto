@@ -57,6 +57,10 @@ public:
     ID2D1DeviceContext* GetDeviceContext() const { return m_deviceContext.Get(); }
     IWICImagingFactory* GetWICFactory() const { return m_wicFactory.Get(); }
 
+    // Text rendering constants (public for shared use)
+    static constexpr wchar_t DEFAULT_FONT_NAME[] = L"Segoe UI";
+    static constexpr wchar_t DEFAULT_LOCALE[] = L"en-us";
+
 private:
     void CreateDeviceResources();
     void DiscardDeviceResources();
@@ -114,8 +118,6 @@ private:
     static constexpr UINT MIN_DIMENSION = 1;
 
     // Text rendering constants
-    static constexpr wchar_t DEFAULT_FONT_NAME[] = L"Segoe UI";
-    static constexpr wchar_t DEFAULT_LOCALE[] = L"en-us";
     static constexpr float TEXT_DRAW_MAX_WIDTH = 1000.0f;
     static constexpr float TEXT_DRAW_MAX_HEIGHT = 200.0f;
 
