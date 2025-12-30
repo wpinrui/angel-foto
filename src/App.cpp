@@ -31,28 +31,73 @@ static WICBitmapTransformOptions GetWICTransformForRotation(int rotation) {
 
 // Crop transformation parameters for coordinate conversion
 struct CropTransformParams {
-    float origW, origH;     // Original image dimensions
-    int cropX, cropY;       // Crop rectangle origin
-    int cropW, cropH;       // Crop rectangle dimensions
+    float originalWidth, originalHeight;
+    int cropRectX, cropRectY;
+    int cropRectWidth, cropRectHeight;
 };
 
 // Check if a normalized point (in original image space) falls inside the crop rectangle
 static bool IsPointInCropRect(float normX, float normY, const CropTransformParams& params) {
-    float pixelX = normX * params.origW;
-    float pixelY = normY * params.origH;
-    return pixelX >= params.cropX && pixelX <= params.cropX + params.cropW &&
-           pixelY >= params.cropY && pixelY <= params.cropY + params.cropH;
+    float pixelX = normX * params.originalWidth;
+    float pixelY = normY * params.originalHeight;
+    return pixelX >= params.cropRectX && pixelX <= params.cropRectX + params.cropRectWidth &&
+           pixelY >= params.cropRectY && pixelY <= params.cropRectY + params.cropRectHeight;
 }
 
 // Transform a normalized point from original image space to cropped image space
 // Returns the new normalized coordinates
 static D2D1_POINT_2F TransformPointToCroppedSpace(float normX, float normY, const CropTransformParams& params) {
-    float pixelX = normX * params.origW;
-    float pixelY = normY * params.origH;
+    float pixelX = normX * params.originalWidth;
+    float pixelY = normY * params.originalHeight;
     return D2D1::Point2F(
-        (pixelX - params.cropX) / params.cropW,
-        (pixelY - params.cropY) / params.cropH
+        (pixelX - params.cropRectX) / params.cropRectWidth,
+        (pixelY - params.cropRectY) / params.cropRectHeight
     );
+}
+
+// Transform markup strokes to cropped coordinate space
+static std::vector<App::MarkupStroke> TransformMarkupStrokesForCrop(
+    const std::vector<App::MarkupStroke>& strokes,
+    const CropTransformParams& params,
+    float scaleFactor)
+{
+    std::vector<App::MarkupStroke> result;
+    for (const auto& stroke : strokes) {
+        App::MarkupStroke newStroke;
+        newStroke.color = stroke.color;
+        newStroke.width = stroke.width * scaleFactor;
+
+        for (const auto& pt : stroke.points) {
+            if (IsPointInCropRect(pt.x, pt.y, params)) {
+                newStroke.points.push_back(TransformPointToCroppedSpace(pt.x, pt.y, params));
+            }
+        }
+
+        if (newStroke.points.size() >= 2) {
+            result.push_back(newStroke);
+        }
+    }
+    return result;
+}
+
+// Transform text overlays to cropped coordinate space
+static std::vector<App::TextOverlay> TransformTextOverlaysForCrop(
+    const std::vector<App::TextOverlay>& texts,
+    const CropTransformParams& params,
+    float scaleFactor)
+{
+    std::vector<App::TextOverlay> result;
+    for (const auto& text : texts) {
+        if (IsPointInCropRect(text.x, text.y, params)) {
+            D2D1_POINT_2F newPos = TransformPointToCroppedSpace(text.x, text.y, params);
+            App::TextOverlay newText = text;
+            newText.x = newPos.x;
+            newText.y = newPos.y;
+            newText.fontSize = text.fontSize * scaleFactor;
+            result.push_back(newText);
+        }
+    }
+    return result;
 }
 
 // Helper to flip buffer from top-down to bottom-up for Windows DIB format
@@ -733,6 +778,84 @@ void App::OpenFolderDialog() {
     }
 }
 
+bool App::PromptSaveEditedImageDialog(bool& saveCopy) {
+    TASKDIALOGCONFIG config = {};
+    config.cbSize = sizeof(config);
+    config.hwndParent = m_window->GetHwnd();
+    config.dwFlags = TDF_USE_COMMAND_LINKS;
+    config.pszWindowTitle = L"Save Image";
+    config.pszMainIcon = TD_INFORMATION_ICON;
+    config.pszMainInstruction = L"The image has markups or crop applied.";
+    config.pszContent = L"How would you like to save?";
+
+    TASKDIALOG_BUTTON buttons[] = {
+        { DIALOG_BUTTON_SAVE_COPY, L"Save Copy\nOriginal file preserved" },
+        { DIALOG_BUTTON_OVERWRITE, L"Overwrite\nReplace original file" },
+        { DIALOG_BUTTON_CANCEL, L"Cancel\nDon't save" }
+    };
+    config.pButtons = buttons;
+    config.cButtons = ARRAYSIZE(buttons);
+
+    int clicked = 0;
+    if (FAILED(TaskDialogIndirect(&config, &clicked, nullptr, nullptr))) return false;
+    if (clicked == DIALOG_BUTTON_CANCEL) return false;
+
+    saveCopy = (clicked == DIALOG_BUTTON_SAVE_COPY);
+    return true;
+}
+
+void App::SaveImageAsCopy(const fs::path& origPath) {
+    // Generate copy filename: image.jpg -> image_edited.jpg
+    fs::path copyPath = origPath.parent_path() /
+        (origPath.stem().wstring() + L"_edited" + origPath.extension().wstring());
+
+    // If file exists, add number: image_edited_2.jpg
+    int counter = EDITED_FILE_COUNTER_START;
+    while (fs::exists(copyPath)) {
+        copyPath = origPath.parent_path() /
+            (origPath.stem().wstring() + L"_edited_" + std::to_wstring(counter++) + origPath.extension().wstring());
+    }
+
+    if (!SaveImageToFile(copyPath.wstring())) return;
+
+    // Clear edits since they're now saved (keep rotation since it wasn't saved)
+    ClearEditState(false);
+    UpdateRendererMarkup();
+    UpdateRendererText();
+    InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
+
+    FlashWindow(m_window->GetHwnd(), TRUE);
+}
+
+void App::SaveImageOverwrite(const fs::path& origPath, const std::wstring& savedFilePath) {
+    std::wstring tempPath = GenerateTempPath(m_currentImage->filePath);
+
+    // Save to temp file
+    if (!SaveImageToFile(tempPath)) return;
+
+    // Release current image so original file isn't locked
+    m_currentImage->bitmap.Reset();
+    m_currentImage = nullptr;
+    m_renderer->ClearImage();
+
+    // Replace original with temp
+    try {
+        fs::remove(origPath);
+        fs::rename(tempPath, origPath);
+    } catch (...) {
+        try { fs::remove(tempPath); } catch (...) {}
+    }
+
+    // Reset transformations since they're now baked in
+    ClearEditState();
+
+    // Reload the image
+    m_navigator->SetCurrentFile(savedFilePath);
+    LoadCurrentImage();
+
+    FlashWindow(m_window->GetHwnd(), TRUE);
+}
+
 void App::SaveImage() {
     if (!m_currentImage || m_currentImage->filePath.empty()) return;
 
@@ -740,81 +863,14 @@ void App::SaveImage() {
     std::wstring savedFilePath = m_currentImage->filePath;
     bool saveCopy = false;
 
-    // If there are edits (markups, text, crop), ask user what to do
     if (HasPendingEdits()) {
-        TASKDIALOGCONFIG config = {};
-        config.cbSize = sizeof(config);
-        config.hwndParent = m_window->GetHwnd();
-        config.dwFlags = TDF_USE_COMMAND_LINKS;
-        config.pszWindowTitle = L"Save Image";
-        config.pszMainIcon = TD_INFORMATION_ICON;
-        config.pszMainInstruction = L"The image has markups or crop applied.";
-        config.pszContent = L"How would you like to save?";
-
-        TASKDIALOG_BUTTON buttons[] = {
-            { DIALOG_BUTTON_SAVE_COPY, L"Save Copy\nOriginal file preserved" },
-            { DIALOG_BUTTON_OVERWRITE, L"Overwrite\nReplace original file" },
-            { DIALOG_BUTTON_CANCEL, L"Cancel\nDon't save" }
-        };
-        config.pButtons = buttons;
-        config.cButtons = ARRAYSIZE(buttons);
-
-        int clicked = 0;
-        if (FAILED(TaskDialogIndirect(&config, &clicked, nullptr, nullptr))) return;
-
-        if (clicked == DIALOG_BUTTON_CANCEL) return;
-        saveCopy = (clicked == DIALOG_BUTTON_SAVE_COPY);
+        if (!PromptSaveEditedImageDialog(saveCopy)) return;
     }
 
     if (saveCopy) {
-        // Generate copy filename: image.jpg -> image_edited.jpg
-        fs::path copyPath = origPath.parent_path() /
-            (origPath.stem().wstring() + L"_edited" + origPath.extension().wstring());
-
-        // If file exists, add number: image_edited_2.jpg
-        int counter = EDITED_FILE_COUNTER_START;
-        while (fs::exists(copyPath)) {
-            copyPath = origPath.parent_path() /
-                (origPath.stem().wstring() + L"_edited_" + std::to_wstring(counter++) + origPath.extension().wstring());
-        }
-
-        if (!SaveImageToFile(copyPath.wstring())) return;
-
-        // Clear edits since they're now saved (keep rotation since it wasn't saved)
-        ClearEditState(false);
-        UpdateRendererMarkup();
-        UpdateRendererText();
-        InvalidateRect(m_window->GetHwnd(), nullptr, FALSE);
-
-        FlashWindow(m_window->GetHwnd(), TRUE);
+        SaveImageAsCopy(origPath);
     } else {
-        // Overwrite original
-        std::wstring tempPath = GenerateTempPath(m_currentImage->filePath);
-
-        // Save to temp file
-        if (!SaveImageToFile(tempPath)) return;
-
-        // Release current image so original file isn't locked
-        m_currentImage->bitmap.Reset();
-        m_currentImage = nullptr;
-        m_renderer->ClearImage();
-
-        // Replace original with temp
-        try {
-            fs::remove(origPath);
-            fs::rename(tempPath, origPath);
-        } catch (...) {
-            try { fs::remove(tempPath); } catch (...) {}
-        }
-
-        // Reset transformations since they're now baked in
-        ClearEditState();
-
-        // Reload the image
-        m_navigator->SetCurrentFile(savedFilePath);
-        LoadCurrentImage();
-
-        FlashWindow(m_window->GetHwnd(), TRUE);
+        SaveImageOverwrite(origPath, savedFilePath);
     }
 }
 
@@ -1195,53 +1251,24 @@ void App::ApplyCrop() {
 
     // Set up crop transformation parameters
     CropTransformParams params;
-    params.origW = static_cast<float>(m_currentImage->width);
-    params.origH = static_cast<float>(m_currentImage->height);
-    params.cropX = static_cast<int>(cropRect.left);
-    params.cropY = static_cast<int>(cropRect.top);
-    params.cropW = static_cast<int>(cropRect.right - cropRect.left);
-    params.cropH = static_cast<int>(cropRect.bottom - cropRect.top);
+    params.originalWidth = static_cast<float>(m_currentImage->width);
+    params.originalHeight = static_cast<float>(m_currentImage->height);
+    params.cropRectX = static_cast<int>(cropRect.left);
+    params.cropRectY = static_cast<int>(cropRect.top);
+    params.cropRectWidth = static_cast<int>(cropRect.right - cropRect.left);
+    params.cropRectHeight = static_cast<int>(cropRect.bottom - cropRect.top);
 
-    if (params.cropW <= 0 || params.cropH <= 0) return;
+    if (params.cropRectWidth <= 0 || params.cropRectHeight <= 0) return;
 
-    float scaleFactor = params.origW / params.cropW;
+    float scaleFactor = params.originalWidth / params.cropRectWidth;
 
-    // Transform markup strokes to new cropped coordinate space
-    std::vector<MarkupStroke> transformedStrokes;
-    for (const auto& stroke : m_markupStrokes) {
-        MarkupStroke newStroke;
-        newStroke.color = stroke.color;
-        newStroke.width = stroke.width * scaleFactor;
-
-        for (const auto& pt : stroke.points) {
-            if (IsPointInCropRect(pt.x, pt.y, params)) {
-                newStroke.points.push_back(TransformPointToCroppedSpace(pt.x, pt.y, params));
-            }
-        }
-
-        if (newStroke.points.size() >= 2) {
-            transformedStrokes.push_back(newStroke);
-        }
-    }
-    m_markupStrokes = transformedStrokes;
-
-    // Transform text overlays to new cropped coordinate space
-    std::vector<TextOverlay> transformedTexts;
-    for (const auto& text : m_textOverlays) {
-        if (IsPointInCropRect(text.x, text.y, params)) {
-            D2D1_POINT_2F newPos = TransformPointToCroppedSpace(text.x, text.y, params);
-            TextOverlay newText = text;
-            newText.x = newPos.x;
-            newText.y = newPos.y;
-            newText.fontSize = text.fontSize * scaleFactor;
-            transformedTexts.push_back(newText);
-        }
-    }
-    m_textOverlays = transformedTexts;
+    // Transform markup and text to new cropped coordinate space
+    m_markupStrokes = TransformMarkupStrokesForCrop(m_markupStrokes, params, scaleFactor);
+    m_textOverlays = TransformTextOverlaysForCrop(m_textOverlays, params, scaleFactor);
 
     // Store crop for saving
     m_hasCrop = true;
-    m_appliedCrop = { params.cropX, params.cropY, params.cropW, params.cropH };
+    m_appliedCrop = { params.cropRectX, params.cropRectY, params.cropRectWidth, params.cropRectHeight };
 
     auto deviceContext = m_renderer->GetDeviceContext();
 
@@ -1252,19 +1279,19 @@ void App::ApplyCrop() {
     );
 
     ComPtr<ID2D1Bitmap1> croppedBitmap;
-    HRESULT hr = deviceContext->CreateBitmap(D2D1::SizeU(params.cropW, params.cropH), nullptr, 0, bitmapProps, &croppedBitmap);
+    HRESULT hr = deviceContext->CreateBitmap(D2D1::SizeU(params.cropRectWidth, params.cropRectHeight), nullptr, 0, bitmapProps, &croppedBitmap);
     if (FAILED(hr)) return;
 
     D2D1_POINT_2U destPoint = {0, 0};
-    D2D1_RECT_U srcRect = {(UINT32)params.cropX, (UINT32)params.cropY,
-                           (UINT32)(params.cropX + params.cropW), (UINT32)(params.cropY + params.cropH)};
+    D2D1_RECT_U srcRect = {(UINT32)params.cropRectX, (UINT32)params.cropRectY,
+                           (UINT32)(params.cropRectX + params.cropRectWidth), (UINT32)(params.cropRectY + params.cropRectHeight)};
     hr = croppedBitmap->CopyFromBitmap(&destPoint, m_currentImage->bitmap.Get(), &srcRect);
     if (FAILED(hr)) return;
 
     // Update current image
     m_currentImage->bitmap = croppedBitmap;
-    m_currentImage->width = params.cropW;
-    m_currentImage->height = params.cropH;
+    m_currentImage->width = params.cropRectWidth;
+    m_currentImage->height = params.cropRectHeight;
 
     m_renderer->SetImage(m_currentImage->bitmap);
     UpdateRendererMarkup();

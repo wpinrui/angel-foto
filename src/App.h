@@ -73,6 +73,9 @@ private:
     void OpenFolderDialog();
     void SaveImage();
     void SaveImageAs();
+    bool PromptSaveEditedImageDialog(bool& saveCopy);
+    void SaveImageAsCopy(const fs::path& origPath);
+    void SaveImageOverwrite(const fs::path& origPath, const std::wstring& savedFilePath);
     void RotateCW();
     void RotateCCW();
     void RotateAndSaveImage(int rotationDelta);  // Shared rotation logic
